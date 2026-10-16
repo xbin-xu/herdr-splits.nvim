@@ -24,11 +24,17 @@ lua/herdr-splits/              Neovim plugin source
   init.lua                     setup() + public API
   nav.lua resize.lua           navigation and resizing
   win.lua                      float / sidebar classification
+  herdr.lua                    Herdr operations over RPC
+  rpc.lua                      control-socket RPC client (libuv pipe)
+  register.lua                 pane registration token + heartbeat
   sync.lua                     Herdr-side script syncing
-  config.lua herdr.lua         config + core
+  conf.lua paths.lua           shared conf file + plugin paths
+  config.lua                   resolved config
   health.lua                   :checkhealth herdr-splits
-scripts/herdr-nav.sh           Herdr-side navigation action
-scripts/herdr-resize.sh        Herdr-side resize action
+scripts/herdr-nav.py           Herdr-side navigation action (fast path)
+scripts/herdr-nav.sh           Herdr-side navigation action (no-python fallback)
+scripts/herdr-resize.py        Herdr-side resize action (fast path)
+scripts/herdr-resize.sh        Herdr-side resize action (no-python fallback)
 scripts/minimal_init.lua       Isolated Neovim test bootstrap
 tests/                         mini.test suites
 Makefile                       Local and CI validation commands

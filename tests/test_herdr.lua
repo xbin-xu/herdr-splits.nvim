@@ -56,35 +56,38 @@ T['resolves the binary and requires a complete session environment'] = function(
   })
 end
 
-T['parses edge responses and rejects invalid command output'] = function()
+T['parses edge responses and rejects invalid replies'] = function()
   local result = child.lua_func(function()
     vim.env.HERDR_ENV = '1'
     vim.env.HERDR_PANE_ID = 'pane-7'
-    local config = require('herdr-splits.config')
-    config.herdr_bin = '/fake/herdr'
 
+    local NIL_REPLY = {} -- sentinel: a literal nil would punch a hole in the queue
     local queue = {
-      { stdout = vim.json.encode({ result = { edges = { left = true } } }), stderr = '', code = 0 },
-      { stdout = vim.json.encode({ result = { edges = { left = false } } }), stderr = '', code = 0 },
-      { stdout = '{bad', stderr = '', code = 0 },
-      { stdout = '', stderr = '', code = 0 },
-      { stdout = vim.json.encode({ result = {} }), stderr = '', code = 0 },
-      { stdout = '{}', stderr = 'failed', code = 2 },
-      { stdout = vim.json.encode({ result = { edges = {} } }), stderr = '', code = 0 },
-      { stdout = '{"result":{"edges":{"left":null}}}', stderr = '', code = 0 },
-      { stdout = vim.json.encode({ result = { edges = { left = 'yes' } } }), stderr = '', code = 0 },
+      { result = { edges = { left = true } } },
+      { result = { edges = { left = false } } },
+      NIL_REPLY, -- transport failure (rpc.call returns nil)
+      { error = { message = 'boom' } },
+      { result = {} },
+      { result = { edges = {} } },
+      { result = { edges = { left = vim.NIL } } },
+      { result = { edges = { left = 'yes' } } },
     }
     local calls = {}
-    vim.system = function(argv, opts)
-      calls[#calls + 1] = { argv = vim.deepcopy(argv), opts = vim.deepcopy(opts) }
-      local item = table.remove(queue, 1)
-      return { wait = function() return item end }
-    end
+    package.loaded['herdr-splits.rpc'] = {
+      call = function(method, params)
+        calls[#calls + 1] = { method = method, params = vim.deepcopy(params) }
+        local item = table.remove(queue, 1)
+        if item == NIL_REPLY then
+          return nil
+        end
+        return item
+      end,
+    }
 
     package.loaded['herdr-splits.herdr'] = nil
     local herdr = require('herdr-splits.herdr')
     local values = {}
-    for i = 1, 9 do
+    for i = 1, 8 do
       local value = herdr.current_pane_at_edge('left')
       values[i] = value == nil and '<nil>' or value
     end
@@ -92,37 +95,40 @@ T['parses edge responses and rejects invalid command output'] = function()
   end)
 
   expect.equality(result.values, {
-    true, false, '<nil>', '<nil>', '<nil>', '<nil>', '<nil>', '<nil>', '<nil>',
+    true, false, '<nil>', '<nil>', '<nil>', '<nil>', '<nil>', '<nil>',
   })
-  expect.equality(#result.calls, 9)
+  expect.equality(#result.calls, 8)
   for _, call in ipairs(result.calls) do
-    expect.equality(call, {
-      argv = { '/fake/herdr', 'pane', 'edges', '--current' },
-      opts = { text = true },
-    })
+    expect.equality(call, { method = 'pane.edges', params = { pane_id = 'pane-7' } })
   end
 end
 
-T['parses zoom responses and rejects invalid command output'] = function()
+T['parses zoom responses and rejects invalid replies'] = function()
   local result = child.lua_func(function()
     vim.env.HERDR_ENV = '1'
     vim.env.HERDR_PANE_ID = 'pane-7'
+    local NIL_REPLY = {}
     local queue = {
-      { stdout = vim.json.encode({ result = { layout = { zoomed = true } } }), stderr = '', code = 0 },
-      { stdout = vim.json.encode({ result = { layout = { zoomed = false } } }), stderr = '', code = 0 },
-      { stdout = '{bad', stderr = '', code = 0 },
-      { stdout = vim.json.encode({ result = {} }), stderr = '', code = 0 },
-      { stdout = '{}', stderr = '', code = 1 },
-      { stdout = vim.json.encode({ result = { layout = {} } }), stderr = '', code = 0 },
-      { stdout = '{"result":{"layout":{"zoomed":null}}}', stderr = '', code = 0 },
-      { stdout = vim.json.encode({ result = { layout = { zoomed = 1 } } }), stderr = '', code = 0 },
+      { result = { layout = { zoomed = true } } },
+      { result = { layout = { zoomed = false } } },
+      NIL_REPLY,
+      { error = { message = 'boom' } },
+      { result = {} },
+      { result = { layout = {} } },
+      { result = { layout = { zoomed = vim.NIL } } },
+      { result = { layout = { zoomed = 1 } } },
     }
     local calls = {}
-    vim.system = function(argv, opts)
-      calls[#calls + 1] = { argv = vim.deepcopy(argv), opts = vim.deepcopy(opts) }
-      local item = table.remove(queue, 1)
-      return { wait = function() return item end }
-    end
+    package.loaded['herdr-splits.rpc'] = {
+      call = function(method, params)
+        calls[#calls + 1] = { method = method, params = vim.deepcopy(params) }
+        local item = table.remove(queue, 1)
+        if item == NIL_REPLY then
+          return nil
+        end
+        return item
+      end,
+    }
 
     package.loaded['herdr-splits.herdr'] = nil
     local herdr = require('herdr-splits.herdr')
@@ -139,72 +145,29 @@ T['parses zoom responses and rejects invalid command output'] = function()
   })
   expect.equality(#result.calls, 8)
   for _, call in ipairs(result.calls) do
-    expect.equality(call.argv, { 'herdr', 'pane', 'layout', '--current' })
-    expect.equality(call.opts, { text = true })
+    expect.equality(call, { method = 'pane.layout', params = {} })
   end
 end
 
-T['rejects JSON null for pane queries'] = function()
+T['focus, unzoom and resize map to RPC calls and report errors'] = function()
   local result = child.lua_func(function()
     vim.env.HERDR_ENV = '1'
     vim.env.HERDR_PANE_ID = 'pane-7'
     local queue = {
-      'null',
-      '{"result":null}',
-      '{"result":{"edges":null}}',
-      'null',
-      '{"result":null}',
-      '{"result":{"layout":null}}',
-    }
-    vim.system = function()
-      local stdout = table.remove(queue, 1)
-      return {
-        wait = function()
-          return { stdout = stdout, stderr = '', code = 0 }
-        end,
-      }
-    end
-
-    package.loaded['herdr-splits.herdr'] = nil
-    local herdr = require('herdr-splits.herdr')
-    local values = {}
-    for _ = 1, 3 do
-      local ok, value = pcall(herdr.current_pane_at_edge, 'left')
-      values[#values + 1] = { ok, value == nil and '<nil>' or value }
-    end
-    for _ = 1, 3 do
-      local ok, value = pcall(herdr.current_pane_is_zoomed)
-      values[#values + 1] = { ok, value == nil and '<nil>' or value }
-    end
-    return values
-  end)
-
-  expect.equality(result, {
-    { true, '<nil>' },
-    { true, '<nil>' },
-    { true, '<nil>' },
-    { true, '<nil>' },
-    { true, '<nil>' },
-    { true, '<nil>' },
-  })
-end
-
-T['focus and unzoom use exact commands and report exit status'] = function()
-  local result = child.lua_func(function()
-    vim.env.HERDR_ENV = '1'
-    vim.env.HERDR_PANE_ID = 'pane-7'
-    local queue = {
-      { stdout = '', stderr = '', code = 0 },
-      { stdout = '', stderr = 'no neighbor', code = 1 },
-      { stdout = '', stderr = '', code = 0 },
-      { stdout = '', stderr = 'failed', code = 1 },
+      { result = {} }, -- focus right: ok
+      { error = { message = 'no neighbor' } }, -- focus left: error reply
+      { result = {} }, -- unzoom: ok
+      { error = { message = 'failed' } }, -- unzoom: error reply
+      { result = {} }, -- resize: ok
+      { error = { message = 'failed' } }, -- resize: error reply
     }
     local calls = {}
-    vim.system = function(argv, opts)
-      calls[#calls + 1] = { argv = vim.deepcopy(argv), opts = vim.deepcopy(opts) }
-      local item = table.remove(queue, 1)
-      return { wait = function() return item end }
-    end
+    package.loaded['herdr-splits.rpc'] = {
+      call = function(method, params)
+        calls[#calls + 1] = { method = method, params = vim.deepcopy(params) }
+        return table.remove(queue, 1)
+      end,
+    }
 
     package.loaded['herdr-splits.herdr'] = nil
     local herdr = require('herdr-splits.herdr')
@@ -214,53 +177,21 @@ T['focus and unzoom use exact commands and report exit status'] = function()
         herdr.focus_pane('left'),
         herdr.unzoom(),
         herdr.unzoom(),
+        herdr.resize_pane('down', 0.03),
+        herdr.resize_pane('left', 1 / 3),
       },
       calls = calls,
     }
   end)
 
-  expect.equality(result.values, { true, false, true, false })
+  expect.equality(result.values, { true, false, true, false, true, false })
   expect.equality(result.calls, {
-    { argv = { 'herdr', 'pane', 'focus', '--direction', 'right', '--current' }, opts = { text = true } },
-    { argv = { 'herdr', 'pane', 'focus', '--direction', 'left', '--current' }, opts = { text = true } },
-    { argv = { 'herdr', 'pane', 'zoom', '--off', '--current' }, opts = { text = true } },
-    { argv = { 'herdr', 'pane', 'zoom', '--off', '--current' }, opts = { text = true } },
-  })
-end
-
-T['resize formats ratios and reports exit status'] = function()
-  local result = child.lua_func(function()
-    vim.env.HERDR_ENV = '1'
-    vim.env.HERDR_PANE_ID = 'pane-7'
-    local queue = {
-      { stdout = '', stderr = '', code = 0 },
-      { stdout = '', stderr = 'failed', code = 1 },
-    }
-    local calls = {}
-    vim.system = function(argv, opts)
-      calls[#calls + 1] = { argv = vim.deepcopy(argv), opts = vim.deepcopy(opts) }
-      local item = table.remove(queue, 1)
-      return { wait = function() return item end }
-    end
-
-    package.loaded['herdr-splits.herdr'] = nil
-    local herdr = require('herdr-splits.herdr')
-    return {
-      values = { herdr.resize_pane('down', 0.03), herdr.resize_pane('left', 1 / 3) },
-      calls = calls,
-    }
-  end)
-
-  expect.equality(result.values, { true, false })
-  expect.equality(result.calls, {
-    {
-      argv = { 'herdr', 'pane', 'resize', '--direction', 'down', '--amount', '0.0300', '--current' },
-      opts = { text = true },
-    },
-    {
-      argv = { 'herdr', 'pane', 'resize', '--direction', 'left', '--amount', '0.3333', '--current' },
-      opts = { text = true },
-    },
+    { method = 'pane.focus_direction', params = { pane_id = 'pane-7', direction = 'right' } },
+    { method = 'pane.focus_direction', params = { pane_id = 'pane-7', direction = 'left' } },
+    { method = 'pane.zoom', params = { pane_id = 'pane-7', mode = 'off' } },
+    { method = 'pane.zoom', params = { pane_id = 'pane-7', mode = 'off' } },
+    { method = 'pane.resize', params = { pane_id = 'pane-7', direction = 'down', amount = 0.03 } },
+    { method = 'pane.resize', params = { pane_id = 'pane-7', direction = 'left', amount = 1 / 3 } },
   })
 end
 

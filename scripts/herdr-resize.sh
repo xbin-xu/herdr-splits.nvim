@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # Herdr resize helper — used by herdr keybinds for seamless two-way resize.
+# Semantics mirror scripts/herdr-resize.py (python = fast path via direct
+# socket RPC; this is the no-python fallback via the herdr CLI). Detection
+# order: HERDR_PANE_ID env → pane registration token → process names.
 #
-# When a resize key (alt+h/j/k/l) is pressed in Herdr:
-# 1. Check if the focused pane is running Neovim in the foreground
-# 2. If yes: forward the key chord into that pane (Neovim's plugin handles it)
-# 3. If no: resize Herdr pane directly
+# When a resize key (default alt+h/j/k/l) is pressed in Herdr:
+# 1. If the focused pane is running Neovim: forward the key chord into that
+#    pane (Neovim's plugin handles it).
+# 2. Otherwise: resize the Herdr pane directly.
 #
 # Zoom state is left untouched (matches smart-splits.nvim's
 # disable_multiplexer_nav_when_zoomed default).
@@ -25,34 +28,23 @@ case "$dir" in
   *) echo "herdr-resize.sh: unknown direction: $dir" >&2; exit 2 ;;
 esac
 
-# Resolve the forward chord from the shared config file.
-# Unset values keep the alt+hjkl default.
-config_path="${HERDR_SPLITS_CONFIG:-${HERDR_PLUGIN_CONFIG_DIR:-$HOME/.config/herdr/plugins/config/herdr-splits}/herdr-splits.conf}"
-if [ -r "$config_path" ]; then
-  configured_key=$(sed -n -E "s/^[[:space:]]*${config_key}[[:space:]]*=[[:space:]]*([^[:space:]#]+).*$/\\1/p" "$config_path" | tail -n 1)
-  if [ -n "$configured_key" ]; then
-    key="$configured_key"
-  fi
-fi
+# shellcheck source=scripts/herdr-common.sh
+. "$(dirname "$0")/herdr-common.sh"
 
-# Get focused pane ID from server
-pane_id=$("$herdr" pane current --current 2>/dev/null | grep -o '"pane_id"\s*:\s*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
+# Resolve the forward chord from the shared config (unset keeps alt+hjkl).
+configured_key=$(herdr_splits_conf_value "$config_key")
+if [ -n "$configured_key" ]; then key="$configured_key"; fi
+
+# herdr injects HERDR_PANE_ID into plugin actions; fall back to pane.current.
+pane_id="${HERDR_PANE_ID:-}"
 if [ -z "$pane_id" ]; then
-  exec "$herdr" pane resize --direction "$dir" --amount "$amount" --current
+  pane_id=$("$herdr" pane current --current 2>/dev/null \
+    | grep -o '"pane_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 \
+    | sed 's/.*"\([^"]*\)"$/\1/' || true)
 fi
 
-# Check if focused pane is running vim/nvim as foreground process.
-# When it is, the key is forwarded into Neovim so the plugin can decide
-# whether to resize a Neovim split or hand off to Herdr.
-is_vim=0
-if pane_info=$("$herdr" pane process-info --current 2>/dev/null); then
-  if echo "$pane_info" | grep -qiE '"name"\s*:\s*"(g?(view|l?n?vim?x?)(diff)?)"' 2>/dev/null; then
-    is_vim=1
-  fi
-fi
-
-if [ "$is_vim" -eq 1 ]; then
+if herdr_splits_is_vim "$herdr" "$pane_id"; then
   exec "$herdr" pane send-keys "$pane_id" "$key"
-else
-  exec "$herdr" pane resize --direction "$dir" --amount "$amount" --current
 fi
+
+exec "$herdr" pane resize --direction "$dir" --amount "$amount" --current

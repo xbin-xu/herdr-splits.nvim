@@ -14,6 +14,7 @@
 local M = {}
 
 local config = require('herdr-splits.config')
+local paths = require('herdr-splits.paths')
 
 ---Plugin id and GitHub source as used by `herdr plugin install`.
 local PLUGIN_ID = 'herdr-splits'
@@ -58,9 +59,7 @@ function M.sync()
     end
 
     -- Resolve this plugin's own checkout root (the lazy clone).
-    local source = debug.getinfo(1, 'S').source -- "@<abs>/lua/herdr-splits/sync.lua"
-    local this_file = source:sub(2) -- strip leading '@'
-    local plugin_root = vim.fn.fnamemodify(this_file, ':p:h:h:h') -- up 3: file<-herdr-splits<-lua<-root
+    local plugin_root = paths.root()
     if vim.fn.isdirectory(plugin_root .. '/.git') == 0
       and vim.fn.filereadable(plugin_root .. '/herdr-plugin.toml') == 0 then
       return -- not a real checkout

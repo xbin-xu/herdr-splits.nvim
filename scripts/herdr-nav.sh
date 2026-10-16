@@ -1,23 +1,18 @@
 #!/usr/bin/env bash
 # Herdr navigation helper — used by herdr keybinds for seamless two-way nav.
+# Semantics mirror scripts/herdr-nav.py (the python scripts are the fast
+# path via direct socket RPC; this is the no-python fallback via the herdr
+# CLI). Detection: HERDR_PANE_ID env → pane registration token → process
+# names.
 #
 # When a navigation key is pressed in Herdr:
-# 1. Check if the focused pane is running Neovim in the foreground.
-#    - If yes: forward the key chord into that pane. The Neovim plugin owns
-#      in-split movement, edge crossing, and unzoom — do NOT unzoom here, or
-#      moving between Neovim splits would incorrectly unzoom the pane.
-# 2. If no (a plain Herdr pane): unzoom if needed, then move Herdr pane focus.
-#    At a layout edge, focus wraps around to the opposite side (smart-splits
-#    style), so navigating past the last pane lands on the first — unless
-#    `nav_at_edge=stop`, in which case it halts at the edge.
-#
-# Auto-unzoom is configurable via `unzoom_on_nav=false` in
-# `~/.config/herdr/plugins/config/herdr-splits/herdr-splits.conf`
-# (same file the Neovim plugin reads). Default: enabled.
-#
-# Edge behaviour for plain Herdr panes is configurable via `nav_at_edge` in
-# the same conf file: `wrap` (default; wraps to the opposite side at an edge)
-# or `stop` (navigation halts at the edge instead of wrapping).
+# 1. If the focused pane is running Neovim: forward the key chord into that
+#    pane. The Neovim plugin owns in-split movement, edge crossing, and
+#    unzoom — do NOT unzoom here, or moving between Neovim splits would
+#    incorrectly unzoom the pane.
+# 2. Otherwise (a plain Herdr pane): unzoom if needed, then move Herdr pane
+#    focus. At a layout edge, focus wraps around to the opposite side,
+#    unless `nav_at_edge=stop`.
 #
 # Usage: herdr-nav.sh <left|down|up|right>
 
@@ -34,44 +29,34 @@ case "$dir" in
   *) echo "herdr-nav.sh: unknown direction: $dir" >&2; exit 2 ;;
 esac
 
-# Resolve `unzoom_on_nav` and `nav_at_edge` from the shared config file.
-# Defaults: unzoom enabled, nav_at_edge=wrap (backward compatible).
+# shellcheck source=scripts/herdr-common.sh
+. "$(dirname "$0")/herdr-common.sh"
+
+# Resolve the forward chord, `unzoom_on_nav` and `nav_at_edge` from the
+# shared config file (defaults: ctrl+hjkl, unzoom enabled, wrap).
+configured_key=$(herdr_splits_conf_value "$config_key")
+if [ -n "$configured_key" ]; then key="$configured_key"; fi
 unzoom=1
-nav_at_edge=wrap
-config_path="${HERDR_SPLITS_CONFIG:-${HERDR_PLUGIN_CONFIG_DIR:-$HOME/.config/herdr/plugins/config/herdr-splits}/herdr-splits.conf}"
-if [ -r "$config_path" ]; then
-  configured_key=$(sed -n -E "s/^[[:space:]]*${config_key}[[:space:]]*=[[:space:]]*([^[:space:]#]+).*$/\\1/p" "$config_path" | tail -n 1)
-  if [ -n "$configured_key" ]; then
-    key="$configured_key"
-  fi
-  if grep -Eq '^[[:space:]]*unzoom_on_nav[[:space:]]*=[[:space:]]*false' "$config_path"; then
-    unzoom=0
-  fi
-  if grep -Eq '^[[:space:]]*nav_at_edge[[:space:]]*=[[:space:]]*stop' "$config_path"; then
-    nav_at_edge=stop
-  fi
-fi
+if [ "$(herdr_splits_conf_value unzoom_on_nav)" = "false" ]; then unzoom=0; fi
+nav_at_edge=$(herdr_splits_conf_value nav_at_edge)
 
-# Get focused pane ID from server (best-effort; empty is fine — we fall
-# through to the non-vim path below, which uses --current directly).
-pane_id=$("$herdr" pane current --current 2>/dev/null | grep -o '"pane_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/' || true)
-
-# Check if focused pane is running vim/nvim as foreground process.
-is_vim=0
-if [ -n "$pane_id" ] && pane_info=$("$herdr" pane process-info --current 2>/dev/null); then
-  if echo "$pane_info" | grep -qiE '"name"[[:space:]]*:[[:space:]]*"(g?(view|l?n?vim?x?)(diff)?)"' 2>/dev/null; then
-    is_vim=1
-  fi
+# herdr injects HERDR_PANE_ID into plugin actions (and panes); fall back to
+# a pane.current query only when it is missing (manual invocation).
+pane_id="${HERDR_PANE_ID:-}"
+if [ -z "$pane_id" ]; then
+  pane_id=$("$herdr" pane current --current 2>/dev/null \
+    | grep -o '"pane_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 \
+    | sed 's/.*"\([^"]*\)"$/\1/' || true)
 fi
 
 # Vim pane: forward the chord; the Neovim plugin decides movement + unzoom.
-if [ "$is_vim" -eq 1 ]; then
+if herdr_splits_is_vim "$herdr" "$pane_id"; then
   exec "$herdr" pane send-keys "$pane_id" "$key"
 fi
 
 # --- Non-vim Herdr pane: unzoom if needed, then focus (wrapping at edges) ---
 
-# `pane edges` reports both edge flags and the zoomed state in one call.
+# `pane edges` reports edge flags plus the zoomed state (inside `layout`).
 edges_out=$("$herdr" pane edges --current 2>/dev/null || true)
 
 # A zoomed pane fills the tab and reports itself at every edge, so the edge
@@ -92,10 +77,9 @@ fi
 # Move to the neighbor in the requested direction. When already at the
 # requested edge (no neighbor there): wrap to the opposite side, or — when
 # nav_at_edge=stop — do nothing. Skip the edge check when the flags are
-# unreliable (still zoomed, unzoom disabled); in that case we can't tell
-# whether we're at an edge, so we just focus in the requested direction.
+# unreliable (still zoomed, unzoom disabled).
 if [ "$edges_trusted" -eq 1 ] && printf '%s' "$edges_out" | grep -q "\"$dir\"[[:space:]]*:[[:space:]]*true"; then
-  if [ "$nav_at_edge" = stop ]; then
+  if [ "$nav_at_edge" = "stop" ]; then
     exit 0
   fi
   exec "$herdr" pane focus --direction "$opp" --current

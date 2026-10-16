@@ -1,10 +1,18 @@
----Herdr CLI wrapper. All Herdr subprocess calls go through this module.
+---Herdr interface: control-socket RPC (rpc.lua) plus the operations nav and
+---resize need. Navigation no longer shells out to the herdr CLI — a spawn
+---costs ~20ms per call on Windows versus ~0.5ms for an RPC roundtrip.
+---
+---The Herdr-side scripts (scripts/herdr-*.py) remain the entry point for
+---keypresses that land in Herdr itself; this module is the Neovim-side
+---counterpart.
 ---@class HerdrSplitsHerdr
 local M = {}
 
 local config = require('herdr-splits.config')
+local rpc = require('herdr-splits.rpc')
 
----Resolve the herdr binary path.
+---Resolve the herdr binary path. Still used for setup-time work (conf-dir
+---discovery, plugin sync); navigation itself goes over the socket.
 ---@return string
 function M.herdr_bin()
   return config.herdr_bin or vim.env.HERDR_BIN_PATH or 'herdr'
@@ -25,42 +33,19 @@ function M.current_pane_id()
   return vim.env.HERDR_PANE_ID
 end
 
----Run a herdr CLI command and return stdout, stderr, and exit code.
----@param args string[]
----@return string stdout, string stderr, number exit_code
-local function herdr_exec(args)
-  local cmd = vim.list_extend({ M.herdr_bin() }, args, 1, #args)
-  local obj = vim.system(cmd, { text = true }):wait()
-  return obj.stdout, obj.stderr, obj.code
-end
-
 ---Check if the current Herdr pane is at the layout boundary in the given direction.
----Calls `herdr pane edges --current` and parses the JSON response.
 ---@param direction '"left"'|'"right"'|'"up"'|'"down"'
 ---@return boolean|nil true if at edge, false if neighbor exists, nil on error
 function M.current_pane_at_edge(direction)
   if not M.is_in_session() then
     return nil
   end
-
-  local edge_key = direction
-  local stdout, _, code = herdr_exec({ 'pane', 'edges', '--current' })
-
-  if code ~= 0 or not stdout or #stdout == 0 then
+  local resp = rpc.call('pane.edges', { pane_id = M.current_pane_id() })
+  local edges = resp and resp.error == nil and resp.result and resp.result.edges
+  if type(edges) ~= 'table' then
     return nil
   end
-
-  local ok, data = pcall(vim.json.decode, stdout)
-  if
-    not ok
-    or type(data) ~= 'table'
-    or type(data.result) ~= 'table'
-    or type(data.result.edges) ~= 'table'
-  then
-    return nil
-  end
-
-  local at_edge = data.result.edges[edge_key]
+  local at_edge = edges[direction]
   if type(at_edge) ~= 'boolean' then
     return nil
   end
@@ -68,59 +53,47 @@ function M.current_pane_at_edge(direction)
 end
 
 ---Check if the current Herdr pane is zoomed.
----Calls `herdr pane layout --current` and parses JSON.
 ---@return boolean|nil true if zoomed, false if not, nil on error
 function M.current_pane_is_zoomed()
   if not M.is_in_session() then
     return nil
   end
-
-  local stdout, _, code = herdr_exec({ 'pane', 'layout', '--current' })
-
-  if code ~= 0 or not stdout or #stdout == 0 then
+  -- pane.layout with no pane_id reports the current tab's layout.
+  local resp = rpc.call('pane.layout', {})
+  local layout = resp and resp.error == nil and resp.result and resp.result.layout
+  if type(layout) ~= 'table' then
     return nil
   end
-
-  local ok, data = pcall(vim.json.decode, stdout)
-  if
-    not ok
-    or type(data) ~= 'table'
-    or type(data.result) ~= 'table'
-    or type(data.result.layout) ~= 'table'
-  then
-    return nil
-  end
-
-  local zoomed = data.result.layout.zoomed
+  local zoomed = layout.zoomed
   if type(zoomed) ~= 'boolean' then
     return nil
   end
   return zoomed
 end
 
----Focus a Herdr pane in the given direction.
----Calls `herdr pane focus --direction <dir> --current`.
+---Focus a Herdr pane in the given direction (Herdr's geometric rule).
+---Calls `pane.focus_direction` over the control socket.
 ---@param direction '"left"'|'"right"'|'"up"'|'"down"'
 ---@return boolean true on success
 function M.focus_pane(direction)
   if not M.is_in_session() then
     return false
   end
-
-  local _, _, code = herdr_exec({ 'pane', 'focus', '--direction', direction, '--current' })
-  return code == 0
+  local resp = rpc.call('pane.focus_direction', {
+    pane_id = M.current_pane_id(),
+    direction = direction,
+  })
+  return resp ~= nil and resp.error == nil
 end
 
 ---Unzoom the current Herdr pane (turn off zoom).
----Calls `herdr pane zoom --off --current`.
 ---@return boolean true on success
 function M.unzoom()
   if not M.is_in_session() then
     return false
   end
-
-  local _, _, code = herdr_exec({ 'pane', 'zoom', '--off', '--current' })
-  return code == 0
+  local resp = rpc.call('pane.zoom', { pane_id = M.current_pane_id(), mode = 'off' })
+  return resp ~= nil and resp.error == nil
 end
 
 ---Check whether auto-unzoom is enabled.
@@ -141,7 +114,6 @@ function M.nav_at_edge()
 end
 
 ---Resize the current Herdr pane in the given direction.
----Calls `herdr pane resize --direction <dir> --amount <float> --current`.
 ---@param direction '"left"'|'"right"'|'"up"'|'"down"'
 ---@param amount number Float ratio (e.g., 0.03 = 3% of terminal dimension)
 ---@return boolean true on success
@@ -149,12 +121,12 @@ function M.resize_pane(direction, amount)
   if not M.is_in_session() then
     return false
   end
-
-  local amount_str = string.format('%.4f', amount)
-  local _, _, code = herdr_exec({
-    'pane', 'resize', '--direction', direction, '--amount', amount_str, '--current',
+  local resp = rpc.call('pane.resize', {
+    pane_id = M.current_pane_id(),
+    direction = direction,
+    amount = amount,
   })
-  return code == 0
+  return resp ~= nil and resp.error == nil
 end
 
 return M

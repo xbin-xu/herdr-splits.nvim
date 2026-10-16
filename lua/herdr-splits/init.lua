@@ -11,6 +11,7 @@ local nav = require('herdr-splits.nav')
 local resize_mod = require('herdr-splits.resize')
 local win = require('herdr-splits.win')
 local sync = require('herdr-splits.sync')
+local register = require('herdr-splits.register')
 
 local M = {}
 
@@ -19,6 +20,7 @@ local M = {}
 function M.setup(opts)
   config.setup(opts)
   pcall(sync.sync)
+  pcall(register.register)
 end
 
 ---Sync the Herdr-managed checkout to match this lazy commit.

@@ -208,7 +208,18 @@ function M.write(resolved)
     vim.notify('herdr-splits: failed to write conf temp file: ' .. tostring(why), vim.log.levels.WARN)
     return false, why
   end
-  local ok, rerr = os.rename(tmp, path)
+  -- uv.fs_rename atomically replaces an existing destination on Windows
+  -- (MoveFileExW + MOVEFILE_REPLACE_EXISTING); the CRT's os.rename fails
+  -- with EEXIST whenever the destination exists, which broke every conf
+  -- regeneration on Windows (stale conf + repeated startup warning).
+  local ok, rerr = uv.fs_rename(tmp, path)
+  if not ok then
+    -- Fallback for destinations MoveFileEx cannot replace (e.g. held open
+    -- without FILE_SHARE_DELETE): remove then rename. Briefly non-atomic,
+    -- but strictly better than leaving the stale conf in place.
+    pcall(os.remove, path)
+    ok, rerr = os.rename(tmp, path)
+  end
   if not ok then
     pcall(os.remove, tmp)
     vim.notify('herdr-splits: failed to write conf: ' .. tostring(rerr), vim.log.levels.WARN)

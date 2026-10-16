@@ -27,6 +27,24 @@ function M.check()
     )
   end
 
+  -- One pane.get roundtrip proves the RPC transport and shows whether the
+  -- registration token went out — the two failure modes of detection.
+  if herdr.is_in_session() then
+    local rpc = require('herdr-splits.rpc')
+    local resp = rpc.call('pane.get', { pane_id = vim.env.HERDR_PANE_ID })
+    if not resp or resp.error then
+      vim.health.error('Herdr RPC unreachable (check HERDR_SOCKET_PATH) — nav/resize will not cross panes')
+    else
+      local pane = resp.result and resp.result.pane or {}
+      local tokens = pane.tokens or {}
+      if tokens.editor == 'nvim' then
+        vim.health.ok('Pane registration token present (editor=nvim)')
+      else
+        vim.health.warn('No editor=nvim token — Herdr-side detection falls back to process names')
+      end
+    end
+  end
+
   vim.health.info(string.format('ignored_buftypes: %s', vim.inspect(config.ignored_buftypes)))
   vim.health.info(string.format('ignored_filetypes: %s', vim.inspect(config.ignored_filetypes)))
   vim.health.info(string.format('floating_zindex_max: %s', tostring(config.floating_zindex_max)))

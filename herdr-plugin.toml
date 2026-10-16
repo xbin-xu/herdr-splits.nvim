@@ -3,7 +3,7 @@ name = "Herdr Splits"
 version = "0.5.3"
 min_herdr_version = "0.7.0"
 description = "Seamless navigation and resizing between Herdr panes and Neovim splits"
-platforms = ["linux", "macos"]
+platforms = ["linux", "macos", "windows"]
 
 # Herdr-side navigation actions. These check if the focused pane is running
 # Neovim and either forward the key chord or move Herdr pane focus.
@@ -17,46 +17,46 @@ platforms = ["linux", "macos"]
 id = "nav-left"
 title = "Navigate left (Neovim/Herder)"
 contexts = ["global"]
-command = ["bash", "scripts/herdr-nav.sh", "left"]
+command = ["python", "-S", "scripts/herdr-nav.py", "left"]
 
 [[actions]]
 id = "nav-down"
 title = "Navigate down (Neovim/Herder)"
 contexts = ["global"]
-command = ["bash", "scripts/herdr-nav.sh", "down"]
+command = ["python", "-S", "scripts/herdr-nav.py", "down"]
 
 [[actions]]
 id = "nav-up"
 title = "Navigate up (Neovim/Herder)"
 contexts = ["global"]
-command = ["bash", "scripts/herdr-nav.sh", "up"]
+command = ["python", "-S", "scripts/herdr-nav.py", "up"]
 
 [[actions]]
 id = "nav-right"
 title = "Navigate right (Neovim/Herder)"
 contexts = ["global"]
-command = ["bash", "scripts/herdr-nav.sh", "right"]
+command = ["python", "-S", "scripts/herdr-nav.py", "right"]
 
 [[actions]]
 id = "resize-left"
 title = "Resize left (Neovim/Herder)"
 contexts = ["global"]
-command = ["bash", "scripts/herdr-resize.sh", "left"]
+command = ["python", "-S", "scripts/herdr-resize.py", "left"]
 
 [[actions]]
 id = "resize-down"
 title = "Resize down (Neovim/Herder)"
 contexts = ["global"]
-command = ["bash", "scripts/herdr-resize.sh", "down"]
+command = ["python", "-S", "scripts/herdr-resize.py", "down"]
 
 [[actions]]
 id = "resize-up"
 title = "Resize up (Neovim/Herder)"
 contexts = ["global"]
-command = ["bash", "scripts/herdr-resize.sh", "up"]
+command = ["python", "-S", "scripts/herdr-resize.py", "up"]
 
 [[actions]]
 id = "resize-right"
 title = "Resize right (Neovim/Herder)"
 contexts = ["global"]
-command = ["bash", "scripts/herdr-resize.sh", "right"]
+command = ["python", "-S", "scripts/herdr-resize.py", "right"]

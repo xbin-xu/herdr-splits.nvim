@@ -28,6 +28,8 @@ Inspired by [smart-splits.nvim](https://github.com/mrjones2014/smart-splits.nvim
 
 - Neovim ≥ 0.10
 - [Herdr](https://herdr.dev) ≥ 0.7.0 (for plugin actions)
+- Python 3 on `PATH` — the Herdr-side plugin actions run `python -S scripts/*.py`
+  (direct socket RPC; the `.sh` scripts remain as a no-python fallback)
 
 ## Installation
 
@@ -404,7 +406,18 @@ Detected automatically through environment variables Herdr injects into every pa
 
 - `HERDR_ENV=1` — set when running inside a Herdr-managed pane
 - `HERDR_PANE_ID` — the public pane ID (e.g., `w1:p1`)
-- `HERDR_BIN_PATH` — path to the herdr binary (for subprocess calls)
+- `HERDR_SOCKET_PATH` — the control socket the Neovim side talks to directly
+  (one RPC roundtrip per action, well under a millisecond; no CLI subprocesses)
+- `HERDR_BIN_PATH` — path to the herdr binary (used for conf-dir discovery and
+  plugin auto-sync, not for navigation)
+
+On setup the plugin registers its pane with Herdr — a TTL'd token
+(`editor=nvim` via `pane.report_metadata`, refreshed by a heartbeat) — and the
+Herdr-side actions read it back to decide whether to forward a key chord into
+the pane. This replaces process-name guessing, which fails on Windows (scoop
+shims and proxy shells hide the editor from `pane process-info`); foreground
+process names remain the fallback for plugin-less vim panes. Run
+`:checkhealth herdr-splits` to inspect transport and registration state.
 
 ## Comparison with vim-herdr-navigation
 
