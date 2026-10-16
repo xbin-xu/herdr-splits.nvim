@@ -86,6 +86,7 @@ herdr plugin link /path/to/herdr-splits
         'quickfix',
       },
       move_cursor_same_row = false,
+      most_recently_focused = false,  -- tmux-style target choice at both levels: most recently focused adjacent window/pane wins (pane recency is shared with the Herdr-side scripts)
       herdr_bin = nil,                -- auto-detected from HERDR_BIN_PATH
       floating_zindex_max = 50,       -- floats with zindex < this are treated as embedded sidebars
       ignore_previewwindows = false,  -- opt-in: also treat previewwindow windows (e.g. .dbout) as sidebars

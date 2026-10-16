@@ -21,6 +21,7 @@ T['moves through native horizontal and vertical splits without delegation'] = fu
   local result = child.lua_func(function()
     local calls = {}
     package.loaded['herdr-splits.herdr'] = {
+      focus_pane_wrap = function() return false end,
       focus_pane = function(direction) calls[#calls + 1] = direction end,
       is_in_session = function() return false end,
     }
@@ -59,6 +60,7 @@ T['applies typed navigation counts without wrapping or delegation'] = function()
     _G.nav_delegations = {}
     package.loaded['herdr-splits.herdr'] = {
       is_in_session = function() return false end,
+      focus_pane_wrap = function() return false end,
       focus_pane = function(direction)
         _G.nav_delegations[#_G.nav_delegations + 1] = direction
         return true
@@ -106,6 +108,7 @@ T['delegates normal floats but no-ops unresolved embedded floats'] = function()
   local result = child.lua_func(function()
     local calls = {}
     package.loaded['herdr-splits.herdr'] = {
+      focus_pane_wrap = function() return false end,
       focus_pane = function(direction)
         calls[#calls + 1] = direction
         return true
@@ -139,6 +142,7 @@ T['navigates embedded floats using parent split geometry'] = function()
   local result = child.lua_func(function()
     local calls = {}
     package.loaded['herdr-splits.herdr'] = {
+      focus_pane_wrap = function() return false end,
       focus_pane = function(direction)
         calls[#calls + 1] = direction
         return true
@@ -211,6 +215,7 @@ T['applies Herdr edge behavior from embedded parent geometry'] = function()
         return edge
       end,
       nav_at_edge = function() return nav_mode end,
+      focus_pane_wrap = function() return false end,
       focus_pane = function(direction)
         calls[#calls + 1] = 'focus:' .. direction
         return true
@@ -399,6 +404,7 @@ T['uses Herdr neighbors and falls back locally on focus or edge failures'] = fun
         if value == '<nil>' then return nil end
         return value
       end,
+      focus_pane_wrap = function() return false end,
       focus_pane = function(direction)
         calls[#calls + 1] = 'focus:' .. direction
         return table.remove(focus_queue, 1)
@@ -475,6 +481,7 @@ T['unzooms and retries native movement before querying Herdr edges'] = function(
         calls[#calls + 1] = 'edge'
         return false
       end,
+      focus_pane_wrap = function() return false end,
       focus_pane = function()
         calls[#calls + 1] = 'focus'
         return true
@@ -505,6 +512,7 @@ T['wraps through the reverse Herdr neighbor unless nav_at_edge stops it'] = func
         return direction == 'left'
       end,
       nav_at_edge = function() return mode end,
+      focus_pane_wrap = function() return false end,
       focus_pane = function(direction)
         calls[#calls + 1] = 'focus:' .. direction
         return true
@@ -544,6 +552,53 @@ T['wraps through the reverse Herdr neighbor unless nav_at_edge stops it'] = func
   })
 end
 
+T['most_recently_focused wrap-cross uses the tmux flip, not the reverse neighbor'] = function()
+  local result = child.lua_func(function()
+    local calls = {}
+    package.loaded['herdr-splits.herdr'] = {
+      is_in_session = function() return true end,
+      unzoom_enabled = function() return false end,
+      current_pane_at_edge = function(direction)
+        calls[#calls + 1] = 'edge:' .. direction
+        return direction == 'left' -- at the left Herdr edge; a pane exists right
+      end,
+      nav_at_edge = function() return 'wrap' end,
+      focus_pane_wrap = function(direction)
+        calls[#calls + 1] = 'wrap:' .. direction
+        return true -- the wrap search (tmux flip) decided the target
+      end,
+      focus_pane = function(direction)
+        calls[#calls + 1] = 'focus:' .. direction
+        return true
+      end,
+    }
+    package.loaded['herdr-splits.nav'] = nil
+    local nav = require('herdr-splits.nav')
+
+    vim.cmd('only')
+    vim.o.splitright = true
+    vim.cmd('vsplit')
+    local wins = vim.api.nvim_tabpage_list_wins(0)
+    table.sort(wins, function(a, b)
+      return vim.api.nvim_win_get_position(a)[2] < vim.api.nvim_win_get_position(b)[2]
+    end)
+    vim.api.nvim_set_current_win(wins[1])
+    nav.move_cursor('left')
+
+    return {
+      stayed = vim.api.nvim_get_current_win() == wins[1],
+      calls = calls,
+    }
+  end)
+
+  -- The pressed direction goes to the wrap search; the geometric
+  -- focus_pane(reverse) fallback must NOT run when the flip decided.
+  expect.equality(result, {
+    stayed = true,
+    calls = { 'edge:left', 'edge:right', 'wrap:left' },
+  })
+end
+
 T['command-line window delegates to Herdr at the screen edge and never wincmds'] = function()
   local result = child.lua_func(function()
     local calls = {}
@@ -565,6 +620,7 @@ T['command-line window delegates to Herdr at the screen edge and never wincmds']
         return edge
       end,
       nav_at_edge = function() return nav_mode end,
+      focus_pane_wrap = function() return false end,
       focus_pane = function(direction)
         calls[#calls + 1] = 'focus:' .. direction
         return true
@@ -616,6 +672,7 @@ T['command-line window no-ops silently when not at a screen edge'] = function()
       is_in_session = function() return true end,
       current_pane_at_edge = function() return false end,
       nav_at_edge = function() return 'wrap' end,
+      focus_pane_wrap = function() return false end,
       focus_pane = function(d) focused[#focused + 1] = d; return true end,
     }
     package.loaded['herdr-splits.nav'] = nil
@@ -641,6 +698,7 @@ T['wrap at a Neovim edge lands on the opposite edge, not the adjacent window'] =
   local result = child.lua_func(function()
     package.loaded['herdr-splits.herdr'] = {
       is_in_session = function() return false end,
+      focus_pane_wrap = function() return false end,
       focus_pane = function() return false end,
     }
     package.loaded['herdr-splits.nav'] = nil
@@ -689,6 +747,94 @@ T['wrap at a Neovim edge lands on the opposite edge, not the adjacent window'] =
   end)
 
   expect.equality(result, { nwins = 4, wrapped_to_opposite = true, wrapped_to_top = true })
+end
+
+T['most_recently_focused picks the last focused adjacent window (tmux-style selection)'] = function()
+  local result = child.lua_func(function()
+    package.loaded['herdr-splits.herdr'] = {
+      is_in_session = function() return false end,
+      focus_pane_wrap = function() return false end,
+      focus_pane = function() return false end,
+    }
+    package.loaded['herdr-splits.nav'] = nil
+    require('herdr-splits.config').most_recently_focused = true
+    local nav = require('herdr-splits.nav')
+
+    -- T layout: A full height on the left; B spans the top right; C and D
+    -- split the bottom right (C left of D).
+    vim.cmd('rightbelow vsplit')
+    vim.cmd('belowright split')
+    vim.cmd('rightbelow vsplit')
+
+    local wins = vim.api.nvim_tabpage_list_wins(0)
+    local A, B, bottom = nil, nil, {}
+    for _, w in ipairs(wins) do
+      local pos = vim.api.nvim_win_get_position(w)
+      if pos[2] == 0 then
+        A = w
+      elseif pos[1] == 0 then
+        B = w
+      else
+        bottom[#bottom + 1] = w
+      end
+    end
+    table.sort(bottom, function(x, y)
+      return vim.api.nvim_win_get_position(x)[2] < vim.api.nvim_win_get_position(y)[2]
+    end)
+    local C, D = bottom[1], bottom[2]
+
+    local function visit(w)
+      vim.api.nvim_set_current_win(w)
+    end
+
+    -- Warm-up move: creates the WinEnter tracker that `visit` relies on.
+    visit(A)
+    nav.move_cursor('right')
+
+    -- A-right between {B, C}: the most recently focused one wins, in both
+    -- orders (mirrors the tmux 3.4 behaviour this replicates).
+    visit(B)
+    visit(C)
+    visit(A)
+    nav.move_cursor('right')
+    local right_mru_c = vim.api.nvim_get_current_win() == C
+
+    visit(C)
+    visit(B)
+    visit(A)
+    nav.move_cursor('right')
+    local right_mru_b = vim.api.nvim_get_current_win() == B
+
+    -- B-down between {C, D}: same rule vertically.
+    visit(D)
+    visit(B)
+    nav.move_cursor('down')
+    local down_mru_d = vim.api.nvim_get_current_win() == D
+
+    -- A-left at the layout edge: the search flips to the right-edge
+    -- candidates {B, D}; the most recently focused of those wins.
+    visit(B)
+    visit(D)
+    visit(A)
+    nav.move_cursor('left')
+    local wrap_mru_d = vim.api.nvim_get_current_win() == D
+
+    return {
+      nwins = #wins,
+      right_mru_c = right_mru_c,
+      right_mru_b = right_mru_b,
+      down_mru_d = down_mru_d,
+      wrap_mru_d = wrap_mru_d,
+    }
+  end)
+
+  expect.equality(result, {
+    nwins = 4,
+    right_mru_c = true,
+    right_mru_b = true,
+    down_mru_d = true,
+    wrap_mru_d = true,
+  })
 end
 
 return T

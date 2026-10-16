@@ -26,6 +26,7 @@ lua/herdr-splits/              Neovim plugin source
   win.lua                      float / sidebar classification
   herdr.lua                    Herdr operations over RPC
   rpc.lua                      control-socket RPC client (libuv pipe)
+  geometry.lua                 directional candidate search (shared rule)
   register.lua                 pane registration token + heartbeat
   sync.lua                     Herdr-side script syncing
   conf.lua paths.lua           shared conf file + plugin paths

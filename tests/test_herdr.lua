@@ -195,4 +195,189 @@ T['focus, unzoom and resize map to RPC calls and report errors'] = function()
   })
 end
 
+T['most_recently_focused picks the most recent adjacent pane via the shared mru file'] = function()
+  local result = child.lua_func(function()
+    vim.env.HERDR_ENV = '1'
+    vim.env.HERDR_PANE_ID = 'p1'
+    local tmpdir = vim.fn.tempname()
+    vim.fn.mkdir(tmpdir, 'p')
+    vim.env.HERDR_SPLITS_CONFIG = tmpdir .. '/herdr-splits.conf'
+    local mru = tmpdir .. '/mru-panes'
+
+    -- T layout: p1 full height left; p2 top right; p3 bottom right.
+    local function tl_layout(zoomed)
+      return {
+        result = {
+          layout = {
+            zoomed = zoomed or false,
+            panes = {
+              { pane_id = 'p1', rect = { x = 0, y = 0, width = 40, height = 20 } },
+              { pane_id = 'p2', rect = { x = 40, y = 0, width = 40, height = 10 } },
+              { pane_id = 'p3', rect = { x = 40, y = 10, width = 40, height = 10 } },
+            },
+          },
+        },
+      }
+    end
+
+    local function read_mru()
+      local f = io.open(mru, 'r')
+      if not f then
+        return '<missing>'
+      end
+      local out = f:read('*a')
+      f:close()
+      return out
+    end
+
+    -- No history: deterministic first candidate (server order) wins.
+    local queue_a = { tl_layout(), { result = {} } }
+    local calls_a = {}
+    package.loaded['herdr-splits.rpc'] = {
+      call = function(method, params)
+        calls_a[#calls_a + 1] = { method = method, params = vim.deepcopy(params) }
+        return table.remove(queue_a, 1)
+      end,
+    }
+    require('herdr-splits.config').most_recently_focused = true
+    package.loaded['herdr-splits.herdr'] = nil
+    local herdr = require('herdr-splits.herdr')
+
+    local first_ok = herdr.focus_pane('right')
+    local after_first = read_mru()
+
+    -- History p3 > p2: the most recent candidate (p3) wins.
+    local f = io.open(mru, 'w')
+    f:write('p3\np2\n')
+    f:close()
+    local queue_b = { tl_layout(), { result = {} } }
+    local calls_b = {}
+    package.loaded['herdr-splits.rpc'].call = function(method, params)
+      calls_b[#calls_b + 1] = { method = method, params = vim.deepcopy(params) }
+      return table.remove(queue_b, 1)
+    end
+
+    local second_ok = herdr.focus_pane('right')
+    local after_second = read_mru()
+
+    -- Zoomed with auto-unzoom disabled: geometric fallback, no pick.
+    require('herdr-splits.config').unzoom_on_nav = false
+    local queue_c = { { result = { layout = { zoomed = true, panes = {} } } }, { result = {} } }
+    local calls_c = {}
+    package.loaded['herdr-splits.rpc'].call = function(method, params)
+      calls_c[#calls_c + 1] = { method = method, params = vim.deepcopy(params) }
+      return table.remove(queue_c, 1)
+    end
+    local third_ok = herdr.focus_pane('right')
+
+    -- Zoomed with auto-unzoom enabled: unzooms, re-reads, then picks.
+    require('herdr-splits.config').unzoom_on_nav = true
+    local queue_d = {
+      { result = { layout = { zoomed = true, panes = { { pane_id = 'p1', rect = { x = 0, y = 0, width = 80, height = 20 } } } } } },
+      { result = {} }, -- pane.zoom off
+      tl_layout(),
+      { result = {} }, -- pane.focus
+    }
+    local calls_d = {}
+    package.loaded['herdr-splits.rpc'].call = function(method, params)
+      calls_d[#calls_d + 1] = { method = method, params = vim.deepcopy(params) }
+      return table.remove(queue_d, 1)
+    end
+    local fourth_ok = herdr.focus_pane('right')
+
+    vim.fn.delete(tmpdir, 'rf')
+    return {
+      first = { first_ok, after_first, calls_a },
+      second = { second_ok, after_second, calls_b },
+      third = { third_ok, calls_c },
+      fourth = { fourth_ok, calls_d },
+    }
+  end)
+
+  expect.equality(result.first[1], true)
+  expect.equality(result.first[2], 'p2\np1\n')
+  expect.equality(result.first[3], {
+    { method = 'pane.layout', params = {} },
+    { method = 'pane.focus', params = { pane_id = 'p2' } },
+  })
+  expect.equality(result.second[1], true)
+  expect.equality(result.second[2], 'p3\np1\np2\n')
+  expect.equality(result.second[3], {
+    { method = 'pane.layout', params = {} },
+    { method = 'pane.focus', params = { pane_id = 'p3' } },
+  })
+  -- Zoomed, unzoom disabled: layout read, then geometric fallback.
+  expect.equality(result.third, {
+    true,
+    {
+      { method = 'pane.layout', params = {} },
+      { method = 'pane.focus_direction', params = { pane_id = 'p1', direction = 'right' } },
+    },
+  })
+  -- Zoomed, unzoom enabled: unzoom, re-read, pick, bump the mru file.
+  expect.equality(result.fourth, {
+    true,
+    {
+      { method = 'pane.layout', params = {} },
+      { method = 'pane.zoom', params = { pane_id = 'p1', mode = 'off' } },
+      { method = 'pane.layout', params = {} },
+      { method = 'pane.focus', params = { pane_id = 'p3' } },
+    },
+  })
+end
+
+T['wrap-cross flips to the opposite-boundary panes, not the reverse-nearest'] = function()
+  local result = child.lua_func(function()
+    vim.env.HERDR_ENV = '1'
+    vim.env.HERDR_PANE_ID = 'A'
+    local tmpdir = vim.fn.tempname()
+    vim.fn.mkdir(tmpdir, 'p')
+    vim.env.HERDR_SPLITS_CONFIG = tmpdir .. '/conf'
+    local f = io.open(tmpdir .. '/mru-panes', 'w')
+    f:write('D\nB\n') -- D more recent than B
+    f:close()
+
+    -- A full height left; B top right; C/D split the bottom right.
+    local layout = {
+      result = {
+        layout = {
+          zoomed = false,
+          panes = {
+            { pane_id = 'A', rect = { x = 0, y = 0, width = 40, height = 20 } },
+            { pane_id = 'B', rect = { x = 40, y = 0, width = 40, height = 10 } },
+            { pane_id = 'C', rect = { x = 40, y = 10, width = 20, height = 10 } },
+            { pane_id = 'D', rect = { x = 60, y = 10, width = 20, height = 10 } },
+          },
+        },
+      },
+    }
+    local calls = {}
+    package.loaded['herdr-splits.rpc'] = {
+      call = function(method, params)
+        calls[#calls + 1] = { method = method, params = vim.deepcopy(params) }
+        if method == 'pane.layout' then
+          return layout
+        end
+        return { result = {} }
+      end,
+    }
+    require('herdr-splits.config').most_recently_focused = true
+    package.loaded['herdr-splits.herdr'] = nil
+    local herdr = require('herdr-splits.herdr')
+
+    local ok = herdr.focus_pane_wrap('left')
+    vim.fn.delete(tmpdir, 'rf')
+    return { ok = ok, calls = calls }
+  end)
+
+  -- Wrapping left from A must target the right-boundary panes {B, D} (the
+  -- tmux flip) — not the reverse-nearest {B, C} — and the most recent (D)
+  -- wins.
+  expect.equality(result.ok, true)
+  expect.equality(result.calls, {
+    { method = 'pane.layout', params = {} },
+    { method = 'pane.focus', params = { pane_id = 'D' } },
+  })
+end
+
 return T

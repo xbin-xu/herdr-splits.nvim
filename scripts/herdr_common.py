@@ -146,6 +146,7 @@ def read_config(kind: str, direction: str) -> dict:
         "key": (NAV_DEFAULT_KEYS if kind == "nav" else RESIZE_DEFAULT_KEYS)[direction],
         "unzoom": True,
         "nav_at_edge": "wrap",
+        "most_recently_focused": False,
     }
     config_path = resolve_config_path()
     try:
@@ -161,6 +162,8 @@ def read_config(kind: str, direction: str) -> dict:
         cfg["unzoom"] = False
     if re.search(r"^\s*nav_at_edge\s*=\s*stop", text, re.MULTILINE):
         cfg["nav_at_edge"] = "stop"
+    if re.search(r"^\s*most_recently_focused\s*=\s*true", text, re.MULTILINE):
+        cfg["most_recently_focused"] = True
     return cfg
 
 
@@ -206,3 +209,154 @@ def is_vim_pane(sock_path: str, pane_id: str) -> bool:
         return False
     procs = resp.get("result", {}).get("process_info", {}).get("foreground_processes", [])
     return any(VIM_PROCESS_RE.match(p.get("name", "")) for p in procs)
+
+
+# ---------------------------------------------------------------------------
+# Pane selection for most_recently_focused (mru* = internal shorthand;
+# tmux select-pane semantics)
+# ---------------------------------------------------------------------------
+
+
+def _pane_layout(sock_path: str):
+    """Current tab's layout as (zoomed, {pane_id: (x, y, w, h)}).
+    When zoomed, herdr reports only the zoomed pane (full area)."""
+    resp = rpc_call(sock_path, "pane.layout", {})
+    layout = resp.get("result", {}).get("layout", {})
+    rects = {}
+    for p in layout.get("panes", []):
+        r = p.get("rect", {})
+        rects[p["pane_id"]] = (r.get("x", 0), r.get("y", 0), r.get("width", 0), r.get("height", 0))
+    return bool(layout.get("zoomed")), rects
+
+
+def _pane_candidates(rects, cur, direction, wrap):
+    """tmux directional search over pane rects: the nearest layer of panes
+    beyond the current one with perpendicular overlap; with `wrap`, the
+    opposite layout boundary (tmux flips its search across the edge).
+    Both passes share one projection of each rect onto the movement axis
+    ([s, e] inclusive, plus the perpendicular span), which collapses the
+    four-direction matrix to the `horiz`/`fwd` pair. Mirrors nav.lua
+    mru_candidates."""
+    if cur not in rects:
+        return []
+    horiz = direction in ("left", "right")
+    fwd = direction in ("right", "down")
+
+    def project(r):
+        """[s, e] inclusive along the movement axis, [ps, pe] across it."""
+        x, y, w, h = r
+        if horiz:
+            return x, x + w - 1, y, y + h - 1
+        return y, y + h - 1, x, x + w - 1
+
+    cs, ce, cps, cpe = project(rects[cur])
+
+    def near(s, e):
+        """The edge facing the movement (tmux's edge comparison)."""
+        return s if fwd else e
+
+    if wrap:
+        # Opposite boundary: right/down wrap to the smallest start
+        # coordinate, left/up wrap to the largest stop coordinate.
+        boundary = float("inf") if fwd else float("-inf")
+        for r in rects.values():
+            s, e = project(r)[:2]
+            boundary = (min(boundary, near(s, e)) if fwd
+                        else max(boundary, near(s, e)))
+        out = []
+        for pid, r in rects.items():
+            if pid == cur:
+                continue
+            s, e, ps, pe = project(r)
+            if near(s, e) == boundary and ps <= cpe and pe >= cps:
+                out.append(pid)
+        return out
+
+    # Nearest layer beyond the current window: smallest positive gap.
+    best, out = None, []
+    for pid, r in rects.items():
+        if pid == cur:
+            continue
+        s, e, ps, pe = project(r)
+        gap = (s - ce) if fwd else (cs - e)
+        if gap >= 1 and ps <= cpe and pe >= cps:
+            if best is None or gap < best:
+                best, out = gap, [pid]
+            elif gap == best:
+                out.append(pid)
+    return out
+
+
+def _mru_path(config_path) -> Path:
+    """Pane MRU state: a small file next to the shared conf, one pane id per
+    line, most-recent-first. Each keypress is a fresh process, so cross-
+    invocation history must live on disk (herdr exposes no recency API)."""
+    return Path(config_path).parent / "mru-panes"
+
+
+def _load_pane_mru(path: Path):
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return []
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def _save_pane_mru(path: Path, order) -> None:
+    """Best-effort atomic write; MRU state is an optimization, never fatal."""
+    tmp = Path(str(path) + ".tmp." + str(os.getpid()))
+    try:
+        tmp.write_text("\n".join(order) + ("\n" if order else ""), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
+
+def mru_focus(sock_path: str, config_path, direction: str, cur_pane: str = None):
+    """Focus the most recently focused pane among the candidates adjacent in
+    `direction` (tmux select-pane semantics). Returns the focused pane id,
+    or None when nothing was found — callers then fall back to Herdr's own
+    focus_direction / edge handling.
+
+    Recency is recorded from the plugin's own moves plus the pane hosting
+    each keypress (the current pane is bumped on every invocation). Focus
+    changes made purely outside the plugin — mouse clicks, Herdr's own
+    bindings — become visible at the next keypress inside that pane, so the
+    MRU order may lag those by one interaction.
+
+    Zoom: with auto-unzoom enabled the pane is unzoomed first and the search
+    runs on the restored layout; with it disabled the layout is unusable and
+    the caller falls back to the legacy path.
+    """
+    cur = cur_pane or os.environ.get("HERDR_PANE_ID", "")
+    if not cur:
+        return None
+    cfg = read_config("nav", direction)
+
+    zoomed, rects = _pane_layout(sock_path)
+    if zoomed:
+        if not cfg.get("unzoom"):
+            return None
+        rpc_call(sock_path, "pane.zoom", {"pane_id": cur, "mode": "off"})
+        _, rects = _pane_layout(sock_path)
+
+    cands = _pane_candidates(rects, cur, direction, wrap=False)
+    if not cands:
+        if cfg.get("nav_at_edge") == "stop":
+            return None
+        cands = _pane_candidates(rects, cur, direction, wrap=True)
+    if not cands:
+        return None
+
+    path = _mru_path(config_path)
+    # Live panes only; the current pane counts as the most recent focus.
+    order = [cur] + [p for p in _load_pane_mru(path) if p != cur and p in rects]
+    pick = next((p for p in order if p in cands), None)
+    if pick is None:
+        pick = cands[0]  # no history yet: deterministic (herdr's own order)
+    _save_pane_mru(path, [pick] + [p for p in order if p != pick])
+    rpc_call(sock_path, "pane.focus", {"pane_id": pick})
+    return pick

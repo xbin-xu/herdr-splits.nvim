@@ -1,6 +1,8 @@
 ---Herdr interface: control-socket RPC (rpc.lua) plus the operations nav and
 ---resize need. Navigation no longer shells out to the herdr CLI — a spawn
----costs ~20ms per call on Windows versus ~0.5ms for an RPC roundtrip.
+---costs ~20ms per call on Windows versus ~0.5ms for an RPC roundtrip — and
+---the pane-level most_recently_focused selection runs here, sharing the
+---mru-panes recency file with the Herdr-side scripts.
 ---
 ---The Herdr-side scripts (scripts/herdr-*.py) remain the entry point for
 ---keypresses that land in Herdr itself; this module is the Neovim-side
@@ -9,6 +11,8 @@
 local M = {}
 
 local config = require('herdr-splits.config')
+local conf = require('herdr-splits.conf')
+local geometry = require('herdr-splits.geometry')
 local rpc = require('herdr-splits.rpc')
 
 ---Resolve the herdr binary path. Still used for setup-time work (conf-dir
@@ -71,19 +75,191 @@ function M.current_pane_is_zoomed()
   return zoomed
 end
 
----Focus a Herdr pane in the given direction (Herdr's geometric rule).
----Calls `pane.focus_direction` over the control socket.
+---Pane rectangles of the current tab, as geometry.candidates entries, in
+---the server's own order; nil when the layout is unavailable.
+---@return boolean|nil zoomed, table|nil rects
+local function pane_rects()
+  local resp = rpc.call('pane.layout', {})
+  local layout = resp and resp.error == nil and resp.result and resp.result.layout
+  if type(layout) ~= 'table' or type(layout.panes) ~= 'table' then
+    return nil
+  end
+  local rects = {}
+  for _, p in ipairs(layout.panes) do
+    local r = p.rect or {}
+    rects[#rects + 1] = {
+      id = p.pane_id,
+      x = r.x or 0,
+      y = r.y or 0,
+      w = r.width or 0,
+      h = r.height or 0,
+    }
+  end
+  return layout.zoomed == true, rects
+end
+
+---Pane recency state, shared with the Herdr-side scripts: one pane id per
+---line, most-recent-first, in a file next to the shared conf (the scripts'
+---`_mru_path`). Each keypress is a fresh process on the script side, so the
+---history must live on disk.
+---@return string
+local function mru_path()
+  return vim.fn.fnamemodify(conf.path(), ':h') .. '/mru-panes'
+end
+
+---@return string[] most-recent-first (raw file order; callers filter)
+local function load_pane_mru()
+  local f = io.open(mru_path(), 'r')
+  if not f then
+    return {}
+  end
+  local order = {}
+  for line in f:lines() do
+    local p = vim.trim(line)
+    if p ~= '' then
+      order[#order + 1] = p
+    end
+  end
+  f:close()
+  return order
+end
+
+---Best-effort atomic write; MRU state is an optimization, never fatal.
+---@param order string[]
+local function save_pane_mru(order)
+  local path = mru_path()
+  local tmp = path .. '.tmp.' .. vim.fn.getpid()
+  local f = io.open(tmp, 'w')
+  if not f then
+    return
+  end
+  local wok = f:write(table.concat(order, '\n') .. (#order > 0 and '\n' or ''))
+  local cok = f:close()
+  if not wok or not cok then
+    pcall(os.remove, tmp)
+    return
+  end
+  local uv = vim.uv or vim.loop
+  local renamed = uv.fs_rename(tmp, path)
+  if not renamed then
+    -- MoveFileEx-failure fallback, as in conf.write: briefly non-atomic.
+    pcall(os.remove, path)
+    pcall(os.rename, tmp, path)
+  end
+end
+
+---tmux-style pane selection: focus the most recently focused pane among the
+---candidates adjacent in `direction`, using the same rule and the same
+---fallbacks as scripts/herdr_common.py `mru_focus` (whose caller in
+---herdr-nav.py falls through to `pane.focus_direction` when the search
+---decides nothing). Returns true only when a pane was focused; every other
+---outcome falls back to the geometric focus in M.focus_pane.
+---@param direction '"left"'|'"right"'|'"up"'|'"down"'
+---@return boolean
+local function focus_pane_mru(direction)
+  local cur = M.current_pane_id()
+  if not cur then
+    return false
+  end
+
+  local zoomed, rects = pane_rects()
+  if not rects then
+    return false
+  end
+  if zoomed then
+    -- A zoomed pane fills the tab, so the layout cannot be searched until
+    -- it is unzoomed. With auto-unzoom disabled the caller falls back to
+    -- Herdr's geometric focus (same as the scripts).
+    if not M.unzoom_enabled() then
+      return false
+    end
+    rpc.call('pane.zoom', { pane_id = cur, mode = 'off' })
+    zoomed, rects = pane_rects()
+    if not rects then
+      return false
+    end
+  end
+
+  local cands = geometry.candidates(rects, cur, direction, false)
+  if #cands == 0 and M.nav_at_edge() ~= 'stop' then
+    cands = geometry.candidates(rects, cur, direction, true)
+  end
+  if #cands == 0 then
+    return false
+  end
+
+  local is_cand, is_live = {}, {}
+  for _, p in ipairs(cands) do
+    is_cand[p] = true
+  end
+  for _, r in ipairs(rects) do
+    is_live[r.id] = true
+  end
+  -- Live panes only; the current pane counts as the most recent focus.
+  local order = { cur }
+  for _, p in ipairs(load_pane_mru()) do
+    if p ~= cur and is_live[p] then
+      order[#order + 1] = p
+    end
+  end
+  local pick
+  for _, p in ipairs(order) do
+    if is_cand[p] then
+      pick = p
+      break
+    end
+  end
+  if not pick then
+    pick = cands[1] -- no history yet: server order, deterministic
+  end
+  local saved = { pick }
+  for _, p in ipairs(order) do
+    if p ~= pick then
+      saved[#saved + 1] = p
+    end
+  end
+  save_pane_mru(saved)
+
+  local resp = rpc.call('pane.focus', { pane_id = pick })
+  return resp ~= nil and resp.error == nil
+end
+
+---Focus a Herdr pane in the given direction.
+---With `most_recently_focused` the target is picked tmux-style among the
+---adjacent panes (shared mru-panes state with the Herdr-side scripts);
+---anything the search cannot decide falls through to Herdr's own geometric
+---focus_direction, mirroring the scripts' behaviour.
 ---@param direction '"left"'|'"right"'|'"up"'|'"down"'
 ---@return boolean true on success
 function M.focus_pane(direction)
   if not M.is_in_session() then
     return false
   end
+
+  if config.most_recently_focused and focus_pane_mru(direction) then
+    return true
+  end
+
   local resp = rpc.call('pane.focus_direction', {
     pane_id = M.current_pane_id(),
     direction = direction,
   })
   return resp ~= nil and resp.error == nil
+end
+
+---Focus the pane the wrap search would target in `direction`: the
+---candidates at the OPPOSITE layout boundary (tmux's edge flip), the same
+---rule wrap_local applies to Neovim windows. Used when Neovim wraps at its
+---edge into a sibling Herdr pane while `most_recently_focused` is on.
+---Returns false when the option is off, outside a session, or the search
+---decides nothing — callers then fall back to the geometric reverse focus.
+---@param direction '"left"'|'"right"'|'"up"'|'"down"'
+---@return boolean true when a pane was focused
+function M.focus_pane_wrap(direction)
+  if not M.is_in_session() or not config.most_recently_focused then
+    return false
+  end
+  return focus_pane_mru(direction)
 end
 
 ---Unzoom the current Herdr pane (turn off zoom).

@@ -16,6 +16,7 @@
 ---@field resize_keys table<string,string> Resize forward chords per direction: {left,down,up,right} (Neovim notation in opts; Herdr notation internally)
 ---@field unzoom_on_nav boolean If true, auto-unzoom when navigating away from a zoomed pane (default true)
 ---@field nav_at_edge 'wrap'|'stop' Herdr pane-boundary wrap behavior (distinct from at_edge, which is the Neovim window-edge behavior)
+---@field most_recently_focused boolean tmux-style target choice at both levels — the most recently focused window/pane among the adjacent candidates, including at wrapped edges (managed: written to the conf so the Herdr-side scripts agree; default false)
 
 -- Managed config defaults (Herdr notation). The single source of truth for
 -- the key set written to herdr-splits.conf; deep-copied into M below and into
@@ -25,6 +26,7 @@ local managed_defaults = {
   resize_keys = { left = 'alt+h', down = 'alt+j', up = 'alt+k', right = 'alt+l' },
   unzoom_on_nav = true,
   nav_at_edge = 'wrap',
+  most_recently_focused = false,
 }
 
 local M = {
@@ -62,16 +64,18 @@ local M = {
   resize_keys = vim.deepcopy(managed_defaults.resize_keys),
   unzoom_on_nav = managed_defaults.unzoom_on_nav,
   nav_at_edge = managed_defaults.nav_at_edge,
+  most_recently_focused = managed_defaults.most_recently_focused,
 }
 
 local conf = require('herdr-splits.conf')
 
 ---Apply user configuration on top of defaults and publish the managed keys
 ---to the shared `herdr-splits.conf` (so the Herdr-side scripts agree).
----Idempotent in outcome: managed keys (nav_keys/resize_keys/unzoom_on_nav/nav_at_edge)
+---Idempotent in outcome: managed keys
+---(nav_keys/resize_keys/unzoom_on_nav/nav_at_edge/most_recently_focused)
 ---rebuild from defaults + opts each call; non-managed opts merge into existing config.
 ---
----Managed keys (nav_keys/resize_keys/unzoom_on_nav/nav_at_edge) resolve with
+---Managed keys (nav_keys/resize_keys/unzoom_on_nav/nav_at_edge/most_recently_focused) resolve with
 ---precedence: defaults -> existing conf value (adopt-once) -> explicit opt.
 ---User chords are given in Neovim notation and translated to Herdr notation
 ---before merging; the resolved set is written to the conf atomically (write
@@ -96,6 +100,7 @@ function M.setup(opts)
   end
   if opts.unzoom_on_nav ~= nil then user.unzoom_on_nav = opts.unzoom_on_nav end
   if opts.nav_at_edge ~= nil then user.nav_at_edge = opts.nav_at_edge end
+  if opts.most_recently_focused ~= nil then user.most_recently_focused = opts.most_recently_focused end
 
   -- Precedence: defaults -> legacy/headerless conf (adopt once) -> explicit
   -- user opts. read_managed returns {} (no adoption) once the conf carries
@@ -107,6 +112,7 @@ function M.setup(opts)
 
   M.nav_keys, M.resize_keys = resolved.nav_keys, resolved.resize_keys
   M.unzoom_on_nav, M.nav_at_edge = resolved.unzoom_on_nav, resolved.nav_at_edge
+  M.most_recently_focused = resolved.most_recently_focused
 
   -- One-time migration notice: a headerless/legacy conf was adopted. Fires
   -- once — after this setup() the conf carries the marker, so later setups
@@ -124,6 +130,9 @@ function M.setup(opts)
     if existing.nav_at_edge ~= nil then
       parts[#parts + 1] = 'nav_at_edge=' .. existing.nav_at_edge
     end
+    if existing.most_recently_focused ~= nil then
+      parts[#parts + 1] = 'most_recently_focused=' .. tostring(existing.most_recently_focused)
+    end
     vim.notify(
       'herdr-splits: adopted legacy conf values (' .. table.concat(parts, ', ')
         .. '). Add them to setup() (Neovim notation) to keep them — the conf is '
@@ -136,6 +145,7 @@ function M.setup(opts)
   local other = vim.deepcopy(opts)
   other.nav_keys, other.resize_keys = nil, nil
   other.unzoom_on_nav, other.nav_at_edge = nil, nil
+  other.most_recently_focused = nil
   local merged = vim.tbl_deep_extend('force', M, other)
   for k, v in pairs(merged) do M[k] = v end
 

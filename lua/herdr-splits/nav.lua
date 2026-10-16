@@ -3,6 +3,7 @@
 local M = {}
 
 local config = require('herdr-splits.config')
+local geometry = require('herdr-splits.geometry')
 local herdr = require('herdr-splits.herdr')
 local win = require('herdr-splits.win')
 
@@ -52,6 +53,89 @@ local function layout_winnrs(winid, key, count)
   if result then
     return result.target, result.previous, result.current
   end
+end
+
+---tmux-style pane selection (`config.most_recently_focused`): among the
+---windows adjacent in the requested direction, the most recently focused
+---one wins — tmux's directional select-pane semantics (its `active_point`
+---ordering, verified empirically against tmux 3.4). At the layout edge the
+---search flips to the opposite boundary, mirroring tmux's edge wrap.
+---(The `mru*` locals below are the internal shorthand for
+---most_recently_focused.)
+local mru = {}
+local mru_counter = 0
+local mru_group
+
+local function mru_bump(win)
+  mru_counter = mru_counter + 1
+  mru[win] = mru_counter
+end
+
+---Create the WinEnter tracker on first use (MRU mode only). Every window
+---transition Neovim performs fires WinEnter (wincmd, nvim_set_current_win,
+---splits, closes, tab switches), so the autocmd is the single writer of
+---recency and no call site bumps explicitly. Keeping the search correct:
+---the current window is by definition the one entered last, i.e. always
+---the most recent.
+local function mru_ensure()
+  if mru_group then
+    return
+  end
+  mru_group = vim.api.nvim_create_augroup('herdr-splits-mru', { clear = true })
+  vim.api.nvim_create_autocmd('WinEnter', {
+    group = mru_group,
+    callback = function()
+      mru_bump(vim.api.nvim_get_current_win())
+    end,
+  })
+end
+
+---Tiled-window rectangle (top-left row/col plus size); floats are excluded
+---(screen-relative position, not part of the tiling the search walks).
+local function tiled_rect(w)
+  if vim.api.nvim_win_get_config(w).relative ~= '' then
+    return nil
+  end
+  local h = vim.api.nvim_win_get_height(w)
+  local width = vim.api.nvim_win_get_width(w)
+  if h == 0 or width == 0 then
+    return nil
+  end
+  local pos = vim.api.nvim_win_get_position(w)
+  return { row = pos[1], col = pos[2], h = h, w = width }
+end
+
+---Windows the tmux directional search considers from the current window in
+---`direction` (see geometry.candidates for the rule itself). Floats and
+---zero-sized windows are excluded — screen-relative position, not part of
+---the tiling the search walks.
+---@param direction '"left"'|'"right"'|'"up"'|'"down"'
+---@param wrap boolean
+---@return number[] winids in tabpage order
+local function mru_candidates(direction, wrap)
+  local rects = {}
+  for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local r = tiled_rect(w)
+    if r then
+      rects[#rects + 1] = { id = w, x = r.col, y = r.row, w = r.w, h = r.h }
+    end
+  end
+  return geometry.candidates(rects, vim.api.nvim_get_current_win(), direction, wrap)
+end
+
+---Most recently focused among `cands`; ties keep the earliest in order,
+---mirroring tmux's strict `active_point >` comparison.
+---@param cands number[]
+---@return number|nil
+local function mru_pick(cands)
+  local best, best_p
+  for _, w in ipairs(cands) do
+    local p = mru[w] or 0
+    if not best_p or p > best_p then
+      best, best_p = w, p
+    end
+  end
+  return best
 end
 
 ---Move cursor between Neovim splits, falling through to Herdr at edges.
@@ -126,18 +210,45 @@ function M.move_cursor(direction, opts)
     return ok and vim.api.nvim_get_current_win() == target
   end
 
-  ---Jump to the window on the opposite side: keep stepping in the reverse
+  ---Jump to the window on the opposite side.
+  ---With `most_recently_focused`, pick among the opposite-edge candidates
+  ---the tmux way (the most recently focused one; tmux flips its directional
+  ---search across the layout edge). Otherwise: keep stepping in the reverse
   ---direction until the walk stops — the window it stops at sits on the far
   ---edge. (One reverse step would only reach the adjacent window, which
   ---coincides with the opposite edge solely when the row/column holds two
   ---windows; with three or more, or in asymmetric layouts, it lands short.)
   local function wrap_local()
+    if config.most_recently_focused and not embedded then
+      local target = mru_pick(mru_candidates(direction, true))
+      if target then
+        local ok = pcall(vim.api.nvim_set_current_win, target)
+        if ok and vim.api.nvim_get_current_win() == target then
+          return true
+        end
+      end
+    end
     local key = win.dir_keys_reverse[direction]
     local guard = vim.fn.winnr('$')
     while guard > 0 and move_local(key, 1) do
       guard = guard - 1
     end
     return true
+  end
+
+  ---Wrap-across-boundary: cross into the sibling Herdr pane on the
+  ---opposite side (we are at the Herdr edge in `direction`, wrap is on, and
+  ---a pane exists behind us). With `most_recently_focused` the target is
+  ---the tmux flip — the wrap search in `direction` picks among the
+  ---candidates at the opposite boundary, matching wrap_local; anything the
+  ---search cannot decide falls back to the geometric reverse focus, which
+  ---is Herdr's own rule (and what the Herdr-side scripts use for plain
+  ---panes).
+  local function cross_wrap_pane()
+    if herdr.focus_pane_wrap(direction) then
+      return
+    end
+    herdr.focus_pane(win.reverse_direction[direction])
   end
 
   -- Command-line window (q:, q/, q?): Neovim forbids all window commands
@@ -150,10 +261,28 @@ function M.move_cursor(direction, opts)
       if at_herdr_edge == false then
         herdr.focus_pane(direction)
       elseif at_herdr_edge == true and herdr.nav_at_edge() ~= 'stop' then
-        herdr.focus_pane(win.reverse_direction[direction])
+        cross_wrap_pane()
       end
     end
     return
+  end
+
+  -- tmux-style selection (opt-in): among the adjacent windows in this
+  -- direction, go to the most recently focused one instead of Neovim's
+  -- native pick. Recency needs no bump here: the landing set_current_win
+  -- fires WinEnter, and the departing window is already the most recent
+  -- (it was entered last). With no candidates (layout edge) the flow below
+  -- still decides: Herdr-cross first, then the wrap behaviour.
+  if config.most_recently_focused and count == 1 and not embedded then
+    mru_ensure()
+    local target = mru_pick(mru_candidates(direction, false))
+    if target then
+      local ok = pcall(vim.api.nvim_set_current_win, target)
+      if ok and vim.api.nvim_get_current_win() == target then
+        restore_same_row()
+        return
+      end
+    end
   end
 
   if move_local(dir_key, count) then
@@ -245,7 +374,7 @@ function M.move_cursor(direction, opts)
       if herdr.nav_at_edge() ~= 'stop'
           and herdr.current_pane_at_edge(win.reverse_direction[direction]) == false
       then
-        herdr.focus_pane(win.reverse_direction[direction])
+        cross_wrap_pane()
       else
         wrap_local()
       end

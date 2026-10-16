@@ -3,7 +3,10 @@
 # Semantics mirror scripts/herdr-nav.py (the python scripts are the fast
 # path via direct socket RPC; this is the no-python fallback via the herdr
 # CLI). Detection: HERDR_PANE_ID env → pane registration token → process
-# names.
+# names. The pane-level MRU mode (`most_recently_focused`) is python-only:
+# the herdr CLI can only focus by direction, while MRU must focus a
+# specific pane chosen by the search (done over the socket). This fallback
+# keeps Herdr's geometric focus rule.
 #
 # When a navigation key is pressed in Herdr:
 # 1. If the focused pane is running Neovim: forward the key chord into that

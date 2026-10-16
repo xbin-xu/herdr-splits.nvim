@@ -71,6 +71,7 @@ T['read_managed adopts managed legacy values with last value winning'] = functio
     'resize_key_up = alt+up',
     'unzoom_on_nav=false',
     'nav_at_edge=stop',
+    'most_recently_focused=true',
     'unknown_key=ignored',
   })
 
@@ -82,6 +83,7 @@ T['read_managed adopts managed legacy values with last value winning'] = functio
       resize_up = values.resize_keys.up,
       unzoom_on_nav = values.unzoom_on_nav,
       nav_at_edge = values.nav_at_edge,
+      most_recently_focused = values.most_recently_focused,
       unknown = values.unknown_key,
     }
   end)
@@ -92,6 +94,7 @@ T['read_managed adopts managed legacy values with last value winning'] = functio
     resize_up = 'alt+up',
     unzoom_on_nav = false,
     nav_at_edge = 'stop',
+    most_recently_focused = true,
   })
 end
 
@@ -137,6 +140,7 @@ T['write creates generated content without leftover temporary files'] = function
     'resize_key_right=alt+l',
     'unzoom_on_nav=false',
     'nav_at_edge=stop',
+    'most_recently_focused=false',
     '',
   }, '\n'))
   expect.equality(child.lua_get([[vim.fn.glob(vim.env.HERDR_SPLITS_CONFIG .. '.tmp.*', false, true)]]), {})

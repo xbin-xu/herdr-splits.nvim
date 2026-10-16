@@ -134,6 +134,10 @@ function M.read_managed()
           out.unzoom_on_nav = (v ~= 'false')
         elseif k == 'nav_at_edge' then
           out.nav_at_edge = (v == 'stop' and 'stop' or 'wrap')
+        elseif k == 'most_recently_focused' then
+          -- Default-off key: only the literal 'true' enables (the generated
+          -- conf and the Herdr-side scripts parse it the same way).
+          out.most_recently_focused = (v == 'true')
         end
       end
     end
@@ -143,7 +147,9 @@ function M.read_managed()
   for _, t in pairs({ out.nav_keys, out.resize_keys }) do
     for _ in pairs(t) do adopted = true; break end
   end
-  if out.unzoom_on_nav ~= nil or out.nav_at_edge ~= nil then adopted = true end
+  if out.unzoom_on_nav ~= nil or out.nav_at_edge ~= nil or out.most_recently_focused ~= nil then
+    adopted = true
+  end
   return out, adopted
 end
 
@@ -174,6 +180,7 @@ function M.write(resolved)
     'resize_key_right=' .. resolved.resize_keys.right,
     'unzoom_on_nav='    .. (resolved.unzoom_on_nav == false and 'false' or 'true'),
     'nav_at_edge='      .. (resolved.nav_at_edge == 'stop' and 'stop' or 'wrap'),
+    'most_recently_focused=' .. (resolved.most_recently_focused == true and 'true' or 'false'),
   }
   local content = table.concat(lines, '\n') .. '\n'
 

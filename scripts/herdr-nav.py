@@ -5,9 +5,14 @@ Talks to the herdr control socket directly over RPC (no herdr CLI
 subprocesses). Detection order: the pane registration token first (reported
 by the editor-side plugin, see lua/herdr-splits/register.lua), then
 foreground process names as the fallback (bare vim without the plugin).
-Same usage and semantics as herdr-nav.sh, the only difference being speed.
+Same usage and semantics as herdr-nav.sh, the only difference being speed
+(the `.sh` fallback does not support pane-level most_recently_focused).
 
-Usage: herdr-nav.py <left|down|up|right>
+--pane-only: called when Neovim crosses out at its edge; performs pane-level
+selection only and never forwards chords into panes (that would loop back
+into Neovim itself).
+
+Usage: herdr-nav.py [--pane-only] <left|down|up|right>
 """
 
 import sys
@@ -19,18 +24,36 @@ from herdr_common import (  # noqa: E402
     current_pane_id,
     discover_socket_path,
     is_vim_pane,
+    mru_focus,
     read_config,
+    resolve_config_path,
     rpc_call,
 )
 
 
+def try_mru(sock_path: str, config_path: Path, cfg: dict, direction: str, pane_id: str) -> bool:
+    """tmux-style pane move when most_recently_focused is on. False hands
+    the caller back to Herdr's own focus_direction / edge handling (option
+    off, layout edge, zoom with unzoom disabled, socket error)."""
+    if not cfg["most_recently_focused"]:
+        return False
+    try:
+        return mru_focus(sock_path, config_path, direction, cur_pane=pane_id) is not None
+    except OSError:
+        return False
+
+
 def main() -> int:
-    if len(sys.argv) != 2 or sys.argv[1] not in DIRECTION_OPPOSITE:
-        print("usage: herdr-nav.py <left|down|up|right>", file=sys.stderr)
+    args = sys.argv[1:]
+    pane_only = "--pane-only" in args
+    args = [a for a in args if a != "--pane-only"]
+    if len(args) != 1 or args[0] not in DIRECTION_OPPOSITE:
+        print("usage: herdr-nav.py [--pane-only] <left|down|up|right>", file=sys.stderr)
         return 2
-    direction = sys.argv[1]
+    direction = args[0]
     opposite = DIRECTION_OPPOSITE[direction]
     cfg = read_config("nav", direction)
+    config_path = resolve_config_path()
     sock_path = discover_socket_path()
 
     try:
@@ -42,9 +65,25 @@ def main() -> int:
         print("herdr-nav: could not determine current pane", file=sys.stderr)
         return 1
 
+    # --pane-only (Neovim crossing out at its edge): pane-level selection
+    # only — never forward chords into panes, or the call would loop back
+    # into Neovim. Kept for plugin versions that predate the Lua RPC client
+    # (current Neovim-side code performs this selection in-process).
+    if pane_only:
+        if try_mru(sock_path, config_path, cfg, direction, pane_id):
+            return 0
+        rpc_call(sock_path, "pane.focus_direction", {"pane_id": pane_id, "direction": direction})
+        return 0
+
     # Vim pane: forward the chord; the Neovim plugin owns movement + unzoom.
     if is_vim_pane(sock_path, pane_id):
         rpc_call(sock_path, "pane.send_keys", {"pane_id": pane_id, "keys": [cfg["key"]]})
+        return 0
+
+    # Plain pane: tmux-style MRU first when opted in; the legacy geometry
+    # below is the fall-through when the search found nothing (edges, zoom
+    # with unzoom disabled, single pane).
+    if try_mru(sock_path, config_path, cfg, direction, pane_id):
         return 0
 
     # Plain pane: unzoom if needed, then focus (wrapping at edges).
