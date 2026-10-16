@@ -637,4 +637,58 @@ T['command-line window no-ops silently when not at a screen edge'] = function()
   expect.equality(result, { stayed = true, focused = {} })
 end
 
+T['wrap at a Neovim edge lands on the opposite edge, not the adjacent window'] = function()
+  local result = child.lua_func(function()
+    package.loaded['herdr-splits.herdr'] = {
+      is_in_session = function() return false end,
+      focus_pane = function() return false end,
+    }
+    package.loaded['herdr-splits.nav'] = nil
+    local nav = require('herdr-splits.nav')
+
+    -- T layout: A full height on the left; B spans the top right; C and D
+    -- split the bottom right (C left of D).
+    vim.cmd('rightbelow vsplit')
+    vim.cmd('belowright split')
+    vim.cmd('rightbelow vsplit')
+
+    local wins = vim.api.nvim_tabpage_list_wins(0)
+    local A, B, bottom = nil, nil, {}
+    for _, w in ipairs(wins) do
+      local pos = vim.api.nvim_win_get_position(w)
+      if pos[2] == 0 then
+        A = w
+      elseif pos[1] == 0 then
+        B = w
+      else
+        bottom[#bottom + 1] = w
+      end
+    end
+    table.sort(bottom, function(x, y)
+      return vim.api.nvim_win_get_position(x)[2] < vim.api.nvim_win_get_position(y)[2]
+    end)
+    local C, D = bottom[1], bottom[2]
+
+    -- From D pressing right: at the right edge, wrap must land on A (the
+    -- opposite edge), not on C — the adjacent window a single reverse step
+    -- would reach.
+    vim.api.nvim_set_current_win(D)
+    nav.move_cursor('right')
+    local wrapped_to_opposite = vim.api.nvim_get_current_win() == A
+
+    -- From C pressing down: at the bottom edge, wrap lands on the top window.
+    vim.api.nvim_set_current_win(C)
+    nav.move_cursor('down')
+    local wrapped_to_top = vim.api.nvim_get_current_win() == B
+
+    return {
+      nwins = #wins,
+      wrapped_to_opposite = wrapped_to_opposite,
+      wrapped_to_top = wrapped_to_top,
+    }
+  end)
+
+  expect.equality(result, { nwins = 4, wrapped_to_opposite = true, wrapped_to_top = true })
+end
+
 return T

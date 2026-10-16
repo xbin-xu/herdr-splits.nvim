@@ -126,8 +126,18 @@ function M.move_cursor(direction, opts)
     return ok and vim.api.nvim_get_current_win() == target
   end
 
+  ---Jump to the window on the opposite side: keep stepping in the reverse
+  ---direction until the walk stops — the window it stops at sits on the far
+  ---edge. (One reverse step would only reach the adjacent window, which
+  ---coincides with the opposite edge solely when the row/column holds two
+  ---windows; with three or more, or in asymmetric layouts, it lands short.)
   local function wrap_local()
-    return move_local(win.dir_keys_reverse[direction], 1)
+    local key = win.dir_keys_reverse[direction]
+    local guard = vim.fn.winnr('$')
+    while guard > 0 and move_local(key, 1) do
+      guard = guard - 1
+    end
+    return true
   end
 
   -- Command-line window (q:, q/, q?): Neovim forbids all window commands
