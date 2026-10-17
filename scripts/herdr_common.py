@@ -18,9 +18,17 @@ import re
 import socket
 import sys
 from pathlib import Path
+from typing import Optional
 
 # Full-match vim family process names; Windows reports e.g. "nvim.exe".
 VIM_PROCESS_RE = re.compile(r"^(g?(view|l?n?vim?x?)(diff)?)(\.exe)?$", re.IGNORECASE)
+
+# The Vim plugin appends this marker to its terminal title under HERDR_ENV.
+# It is the plain-Vim analogue of the nvim pane token: it advertises the
+# plugin (not merely "a vim process"), which is what the key-forwarding
+# decision needs. On Windows pane.process_info cannot see a program started
+# from the pane shell, so the title is the only always-current signal.
+VIM_TITLE_MARKER = "[herdr-splits]"
 
 DIRECTION_OPPOSITE = {"left": "right", "right": "left", "up": "down", "down": "up"}
 
@@ -172,20 +180,6 @@ def read_config(kind: str, direction: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def pane_has_editor(sock_path: str, pane_id: str) -> bool:
-    """True when the pane carries the editor registration token.
-
-    The Neovim plugin reports tokens{editor=nvim} via pane.report_metadata
-    with a TTL (lua/herdr-splits/register.lua): a stale registration expires
-    server-side and a pane that no longer runs Neovim stops matching on its
-    own — no files, no pid-liveness probing."""
-    if not pane_id:
-        return False
-    resp = rpc_call(sock_path, "pane.get", {"pane_id": pane_id})
-    tokens = resp.get("result", {}).get("pane", {}).get("tokens") or {}
-    return tokens.get("editor") == "nvim"
-
-
 def current_pane_id(sock_path: str) -> str:
     """herdr injects HERDR_PANE_ID into plugin actions (and panes); fall back
     to a pane.current RPC only when it is missing (manual invocation)."""
@@ -197,18 +191,42 @@ def current_pane_id(sock_path: str) -> str:
     return pane.get("pane_id", "")
 
 
-def is_vim_pane(sock_path: str, pane_id: str) -> bool:
-    """Registration token first (the editor side knows what it is; process
-    names are a guess, and on Windows they cannot see through shims / proxy
-    shells at all — no tcgetpgrp equivalent on ConPTY), then foreground
-    process names for plugin-less vim/gvim panes."""
-    if pane_has_editor(sock_path, pane_id):
-        return True
+def _pane_get(sock_path: str, pane_id: str) -> dict:
+    resp = rpc_call(sock_path, "pane.get", {"pane_id": pane_id})
+    return (resp.get("result", {}) or {}).get("pane", {}) or {}
+
+
+def pane_editor(sock_path: str, pane_id: str) -> Optional[str]:
+    """Identify the editor owning the pane: 'nvim', 'vim', or None.
+
+    One pane.get carries both explicit signals: the TTL'd token reported by
+    the Neovim plugin, and the title marker appended by the Vim plugin. The
+    title is checked before process_info because it is exact and already in
+    hand; foreground process names remain the fallback for plugin-less
+    vim/gvim on Unix, where they are visible (on Windows they are not: the
+    MSYS spawn layer hides everything below the pane shell).
+    """
+    if not pane_id:
+        return None
+    pane = _pane_get(sock_path, pane_id)
+    if (pane.get("tokens") or {}).get("editor") == "nvim":
+        return "nvim"
+    if VIM_TITLE_MARKER in (pane.get("terminal_title_stripped") or ""):
+        return "vim"
+
     resp = rpc_call(sock_path, "pane.process_info", {"pane_id": pane_id})
-    if "error" in resp:
-        return False
-    procs = resp.get("result", {}).get("process_info", {}).get("foreground_processes", [])
-    return any(VIM_PROCESS_RE.match(p.get("name", "")) for p in procs)
+    if "error" not in resp:
+        procs = resp.get("result", {}).get("process_info", {}).get("foreground_processes", [])
+        for proc in procs:
+            name = proc.get("name", "").lower()
+            if VIM_PROCESS_RE.match(name):
+                return "nvim" if "nvim" in name else "vim"
+    return None
+
+
+def is_vim_pane(sock_path: str, pane_id: str) -> bool:
+    """True when the pane runs an editor that owns the navigation keys."""
+    return pane_editor(sock_path, pane_id) is not None
 
 
 # ---------------------------------------------------------------------------

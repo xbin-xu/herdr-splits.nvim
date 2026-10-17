@@ -2,11 +2,12 @@ id = "herdr-splits"
 name = "Herdr Splits"
 version = "0.5.3"
 min_herdr_version = "0.7.0"
-description = "Seamless navigation and resizing between Herdr panes and Neovim splits"
+description = "Seamless navigation between Herdr panes and Neovim/Vim splits, with native Neovim resizing"
 platforms = ["linux", "macos", "windows"]
 
-# Herdr-side navigation actions. These check if the focused pane is running
-# Neovim and either forward the key chord or move Herdr pane focus.
+# Herdr-side navigation actions. These check if the focused pane is running an
+# editor (Neovim token or Vim title marker) and either forward the key chord or
+# move Herdr pane focus.
 # Bind them in ~/.config/herdr/config.toml:
 #   [[keys.command]]
 #   key = "ctrl+h"
@@ -15,25 +16,25 @@ platforms = ["linux", "macos", "windows"]
 
 [[actions]]
 id = "nav-left"
-title = "Navigate left (Neovim/Herder)"
+title = "Navigate left (editor/Herdr)"
 contexts = ["global"]
 command = ["python", "-S", "scripts/herdr-nav.py", "left"]
 
 [[actions]]
 id = "nav-down"
-title = "Navigate down (Neovim/Herder)"
+title = "Navigate down (editor/Herdr)"
 contexts = ["global"]
 command = ["python", "-S", "scripts/herdr-nav.py", "down"]
 
 [[actions]]
 id = "nav-up"
-title = "Navigate up (Neovim/Herder)"
+title = "Navigate up (editor/Herdr)"
 contexts = ["global"]
 command = ["python", "-S", "scripts/herdr-nav.py", "up"]
 
 [[actions]]
 id = "nav-right"
-title = "Navigate right (Neovim/Herder)"
+title = "Navigate right (editor/Herdr)"
 contexts = ["global"]
 command = ["python", "-S", "scripts/herdr-nav.py", "right"]
 

@@ -11,14 +11,15 @@
 
 </div>
 
-Seamless navigation and resizing between Neovim splits and [Herdr](https://herdr.dev) panes. Makes Herdr terminal splits behave like native Neovim windows — move and resize as if they were all part of the same editor.
+Seamless navigation between Neovim/Vim splits and [Herdr](https://herdr.dev) panes, plus native resizing for Neovim splits. Makes Herdr terminal splits behave like native editor windows — move (and, in Neovim, resize) as if they were all part of the same editor.
 
 Inspired by [smart-splits.nvim](https://github.com/mrjones2014/smart-splits.nvim), ported to Herdr's CLI.
 
 ## Features
 
-- **Seamless navigation**: Same keys work in Neovim and plain shells — Herdr forwards them to Neovim when appropriate, Neovim delegates to Herdr at edges.
-- **Seamless resizing**: `<M-h/j/k/l>` resizes Neovim splits natively, delegates to Herdr when a window fills the terminal.
+- **Seamless navigation**: Same keys work in Neovim, plain Vim, and plain shells — Herdr forwards them to the editor when appropriate, the editor delegates to Herdr at edges.
+- **Seamless resizing** (Neovim): `<M-h/j/k/l>` resizes Neovim splits natively, delegates to Herdr when a window fills the terminal. Plain Vim keeps pane-level resizing.
+- **Plain Vim support**: `Ctrl+hjkl` navigation (normal and terminal mode) with the same MRU/config semantics as Neovim, including at the pane edge.
 - **at_edge behaviours**: `wrap` (default), `stop`, `split`, or a custom function.
 - **Plugin-aware**: Ignores snacks/neo-tree/dadbod-ui/aerial sidebars and embedded floats (zindex < 50) by default — your keybinds never get trapped inside a picker.
 - **Smart unzoom + wrap-around**: Auto-unzooms when leaving a zoomed pane. At a layout edge, navigation wraps to the opposite side — crossing into a sibling Herdr pane when one exists (e.g. `pane | nvim` → `ctrl+l` wraps to the pane), otherwise wrapping within Neovim. Herdr-pane navigation also wraps around at edges (past the last pane → the first). Does not unzoom when moving between Neovim splits in one pane.
@@ -26,10 +27,12 @@ Inspired by [smart-splits.nvim](https://github.com/mrjones2014/smart-splits.nvim
 
 ## Requirements
 
-- Neovim ≥ 0.10
+- Neovim ≥ 0.10 for the Lua plugin, **or** Vim ≥ 8.1 with `+job` for
+  plain-Vim navigation
 - [Herdr](https://herdr.dev) ≥ 0.7.0 (for plugin actions)
 - Python 3 on `PATH` — the Herdr-side plugin actions run `python -S scripts/*.py`
-  (direct socket RPC; the `.sh` scripts remain as a no-python fallback)
+  (direct socket RPC; the `.sh` scripts remain as a no-python fallback). Plain
+  Vim also uses it for the edge handoff.
 
 ## Installation
 
@@ -122,6 +125,62 @@ use {
   end,
 }
 ```
+
+### 2b. Plain Vim (navigation only)
+
+Add the checkout to `runtimepath` with your plugin manager, e.g. vim-plug:
+
+```vim
+Plug 'lmilojevicc/herdr-splits.nvim'
+" while testing a fork/branch:
+" Plug 'xbin-xu/herdr-splits.nvim', { 'branch': 'feat/windows-support' }
+```
+
+The Vim runtime files are `plugin/herdr-splits.vim` (title advertisement and
+`C-hjkl` mappings) and `autoload/herdr_splits.vim` (navigation, MRU, edge
+handoff).
+
+Inside a Herdr pane the plugin:
+
+- maps `<C-h/j/k/l>` in normal and terminal mode;
+- reads `most_recently_focused` from the shared `herdr-splits.conf` written by
+  the Neovim `setup()` (override per editor with
+  `let g:herdr_splits_most_recently_focused = 0` or `1`);
+- hands the direction to `scripts/herdr-nav.py --pane-only` asynchronously when
+  Vim is at its edge (Python is required for this step).
+
+Configuration (set before the plugin loads):
+
+```vim
+let g:herdr_splits_python = 'python'          " interpreter for the edge handoff
+let g:herdr_splits_script = ''                " optional explicit herdr-nav.py
+let g:herdr_splits_most_recently_focused = 1  " override the shared conf
+```
+
+If you also use vim-tmux-navigator, disable its mappings in the vimrc (before
+any plugin loads); this plugin owns `C-hjkl` inside Herdr:
+
+```vim
+if $HERDR_ENV ==# '1'
+  let g:tmux_navigator_no_mappings = 1
+endif
+```
+
+Notes:
+
+- Mappings are defined only when `$HERDR_ENV == '1'`, so tmux navigation
+  outside Herdr keeps working.
+- Plain Vim has navigation only. If you bind the Herdr `resize-*` actions,
+  they resize the **Herdr pane** when the focused pane is plain Vim (Neovim
+  handles that chord itself).
+- On Windows, Herdr's `pane process-info` cannot see programs started from the
+  pane shell. The plugin therefore appends `[herdr-splits]` to `titlestring`
+  (only inside Herdr) so detection identifies the plugin, not merely "some
+  Vim". Do not `set notitle` after startup, and start Vim with the plugin
+  loaded.
+- Neovim-only parity gaps in plain Vim: no local `at_edge=wrap`/`split`
+  behavior, no float/sidebar handling, and a count prefix stays inside Vim
+  (it never crosses a pane boundary).
 
 ### 3. Add keybinds to Herdr config
 
@@ -355,33 +414,43 @@ You press C-h in a Herdr pane:
 
   ┌─ Herdr intercepts the key (plugin_action keybind)
   │
-  ├─ Is the focused pane running Neovim?
+  ├─ Is the focused pane running an editor (Neovim / plain Vim with this plugin)?
   │   │
   │   ├─ YES → forward "ctrl+h" into that pane
-  │   │         └─ Neovim plugin receives it
+  │   │         └─ the editor plugin receives it
   │   │              ├─ Has a window to the left? → wincmd h
-  │   │              └─ At Neovim edge? → herdr pane focus --direction left
+  │   │              └─ At the editor edge? → cross into the Herdr pane
   │   │
   │   └─ NO (plain shell, etc.) → herdr pane focus --direction left
   │
   └─ Result: same keys move you everywhere
 ```
 
+Neovim performs the edge crossing in-process over the control socket. Plain Vim
+cannot open Herdr's socket from Vimscript, so at its edge it spawns
+`scripts/herdr-nav.py --pane-only` (direct RPC) asynchronously; the pane-level
+decision (MRU, unzoom, wrap) stays in one implementation.
+
 ### Navigation
 
 ```text
-1. Try moving within Neovim (wincmd h/j/k/l)
-   ├─ Window changed → done (stayed within Neovim splits)
-   └─ Window didn't change → at Neovim edge
+1. Try moving within the editor (wincmd h/j/k/l)
+   ├─ Window changed → done (stayed within the editor's splits)
+   └─ Window didn't change → at the editor edge
         ├─ Zoomed? → unzoom first (neighbours are reliable once visible)
         ├─ Check if Herdr is running (HERDR_ENV=1)
         ├─ Check if Herdr pane has a neighbour in this direction
         │   └─ Yes → herdr pane focus --direction → done
-        └─ No (at both Neovim AND Herdr edge) →
+        └─ No (at both the editor AND Herdr edge) →
              apply at_edge behaviour (`wrap` crosses to the opposite Herdr
              pane if one exists and nav_at_edge=wrap (the default), else
              wraps within Neovim)
 ```
+
+Plain Vim mirrors the local move (including the shared `most_recently_focused`
+choice) and delegates at its edge to `herdr-nav.py --pane-only`. The
+Neovim-only `at_edge` modes, float/sidebar handling, and local wrap do not
+apply in plain Vim.
 
 ### Resizing
 
@@ -391,6 +460,10 @@ You press C-h in a Herdr pane:
 2. Otherwise:
    └─ Native Neovim resize with position-aware +/- operators
 ```
+
+Plain Vim is treated like a plain pane for resizing: the `resize-*` actions
+resize the Herdr pane directly, because the Vim adapter implements navigation
+but no resize mappings.
 
 ### Float and embedded-float classification
 
@@ -412,34 +485,52 @@ Detected automatically through environment variables Herdr injects into every pa
 - `HERDR_BIN_PATH` — path to the herdr binary (used for conf-dir discovery and
   plugin auto-sync, not for navigation)
 
-On setup the plugin registers its pane with Herdr — a TTL'd token
-(`editor=nvim` via `pane.report_metadata`, refreshed by a heartbeat) — and the
-Herdr-side actions read it back to decide whether to forward a key chord into
-the pane. This replaces process-name guessing, which fails on Windows (scoop
-shims and proxy shells hide the editor from `pane process-info`); foreground
-process names remain the fallback for plugin-less vim panes. Run
-`:checkhealth herdr-splits` to inspect transport and registration state.
+Detection answers one question: **should Herdr forward the key into this pane,
+or move pane focus itself?** The answer has to identify the plugin, not merely
+"a Vim process" — forwarding into a Vim without these mappings would swallow
+the key.
+
+- **Neovim** registers its pane with Herdr on `setup()`: a TTL'd token
+  (`editor=nvim` via `pane.report_metadata`, refreshed by a heartbeat). The
+  Herdr-side actions read it back over RPC.
+- **Plain Vim** has no RPC transport for a token (Vimscript's `ch_open()` has
+  no named-pipe support; Herdr uses a Windows named pipe). The Vim plugin
+  appends `[herdr-splits]` to `titlestring` while `$HERDR_ENV=1`; Herdr reads
+  it from `terminal_title_stripped`. This is the only reliable signal on
+  Windows, where `pane.process_info` reports the pane shell instead of a
+  program started from it. The marker is appended to a customized
+  `titlestring` too; Vim restores the title on suspend/exit and reapplies it on
+  resume.
+- **Plugin-less vim/gvim on Unix** remains the last fallback via foreground
+  process names. On Windows those names are not visible, so plain Vim needs the
+  plugin's title marker.
+
+Run `:checkhealth herdr-splits` (Neovim) to inspect transport and registration
+state. In plain Vim, `:echo &titlestring` inside a Herdr pane should end with
+`[herdr-splits]`.
 
 ## Comparison with vim-herdr-navigation
 
 | Feature                     | vim-herdr-navigation | herdr-splits.nvim            |
 | --------------------------- | -------------------- | ---------------------------- |
 | Navigation                  | ✓                    | ✓                            |
-| Resizing                    | ✗                    | ✓                            |
+| Plain Vim                   | ✓ (wincmd only)      | ✓ (MRU + shared conf)        |
+| Resizing                    | ✗                    | ✓ (Neovim)                   |
 | at_edge behaviours          | ✗                    | wrap / stop / split / custom |
 | Count prefix                | ✗                    | ✓ (3<C-h> = move 3 left)     |
 | Auto-unzoom + wrap-around   | ✗                    | ✓                            |
 | Floating window handling    | ✗                    | ✓                            |
+| Windows                     | ✗ (Linux/macOS only) | ✓                            |
 | Herdr plugin (for keybinds) | ✓                    | ✓                            |
-| Neovim plugin               | ✓                    | ✓                            |
+| Editor plugin               | ✓ (Neovim + Vim)     | ✓ (Neovim + Vim)             |
 
 ## Updating
 
 The Neovim side (lua) auto-updates via lazy.nvim — it pulls `main` on
-`LazySync`. The Herdr side (the bash scripts under the Herdr-managed
-checkout) does **not** auto-update by default: Herdr v1 has no
-`herdr plugin update`, so a managed checkout stays frozen at the commit it
-was installed from.
+`LazySync`. Plain Vim updates with your Vim plugin manager (or by refreshing
+its checkout). The Herdr side (the scripts under the Herdr-managed checkout)
+does **not** auto-update by default: Herdr v1 has no `herdr plugin update`, so
+a managed checkout stays frozen at the commit it was installed from.
 
 **Option A — opt into automatic sync (recommended):** set
 `auto_sync_herdr = true` in `setup()`. The plugin then reinstalls the

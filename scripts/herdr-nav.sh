@@ -2,8 +2,9 @@
 # Herdr navigation helper — used by herdr keybinds for seamless two-way nav.
 # Semantics mirror scripts/herdr-nav.py (the python scripts are the fast
 # path via direct socket RPC; this is the no-python fallback via the herdr
-# CLI). Detection: HERDR_PANE_ID env → pane registration token → process
-# names. The pane-level MRU mode (`most_recently_focused`) is python-only:
+# CLI). Detection: HERDR_PANE_ID env → pane registration token → Vim title
+# marker → process names. The pane-level MRU mode (`most_recently_focused`)
+# is python-only:
 # the herdr CLI can only focus by direction, while MRU must focus a
 # specific pane chosen by the search (done over the socket). This fallback
 # keeps Herdr's geometric focus rule.
@@ -52,7 +53,8 @@ if [ -z "$pane_id" ]; then
     | sed 's/.*"\([^"]*\)"$/\1/' || true)
 fi
 
-# Vim pane: forward the chord; the Neovim plugin decides movement + unzoom.
+# Vim/Neovim pane: forward the chord; the editor plugin decides movement,
+# unzoom, and edge crossing.
 if herdr_splits_is_vim "$herdr" "$pane_id"; then
   exec "$herdr" pane send-keys "$pane_id" "$key"
 fi

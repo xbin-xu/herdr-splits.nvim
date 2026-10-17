@@ -3,10 +3,11 @@
 
 Talks to the herdr control socket directly over RPC (no herdr CLI
 subprocesses). Detection order: the pane registration token first (reported
-by the editor-side plugin, see lua/herdr-splits/register.lua), then
-foreground process names as the fallback (bare vim without the plugin).
-Same usage and semantics as herdr-nav.sh, the only difference being speed
-(the `.sh` fallback does not support pane-level most_recently_focused).
+by the Neovim plugin, see lua/herdr-splits/register.lua), then the Vim
+plugin's terminal-title marker (plain Vim has no RPC transport for a token),
+then foreground process names for plugin-less editors. Same usage and
+semantics as herdr-nav.sh, the only difference being speed (the `.sh`
+fallback does not support pane-level most_recently_focused).
 
 --pane-only: called when Neovim crosses out at its edge; performs pane-level
 selection only and never forwards chords into panes (that would loop back

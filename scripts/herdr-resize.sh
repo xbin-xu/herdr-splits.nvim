@@ -2,12 +2,13 @@
 # Herdr resize helper — used by herdr keybinds for seamless two-way resize.
 # Semantics mirror scripts/herdr-resize.py (python = fast path via direct
 # socket RPC; this is the no-python fallback via the herdr CLI). Detection
-# order: HERDR_PANE_ID env → pane registration token → process names.
+# order: HERDR_PANE_ID env → pane registration token → nvim process names.
 #
 # When a resize key (default alt+h/j/k/l) is pressed in Herdr:
 # 1. If the focused pane is running Neovim: forward the key chord into that
 #    pane (Neovim's plugin handles it).
-# 2. Otherwise: resize the Herdr pane directly.
+# 2. Otherwise (including plain Vim, which has no resize mappings): resize
+#    the Herdr pane directly.
 #
 # Zoom state is left untouched (matches smart-splits.nvim's
 # disable_multiplexer_nav_when_zoomed default).
@@ -43,7 +44,7 @@ if [ -z "$pane_id" ]; then
     | sed 's/.*"\([^"]*\)"$/\1/' || true)
 fi
 
-if herdr_splits_is_vim "$herdr" "$pane_id"; then
+if herdr_splits_is_nvim "$herdr" "$pane_id"; then
   exec "$herdr" pane send-keys "$pane_id" "$key"
 fi
 

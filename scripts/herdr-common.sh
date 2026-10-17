@@ -2,10 +2,10 @@
 # herdr-common.sh — shared helpers for herdr-nav.sh / herdr-resize.sh.
 #
 # Bash port of scripts/herdr_common.py: same detection order and semantics
-# (HERDR_PANE_ID first, pane-registration token before process-name
-# guessing). The python scripts are the fast path (direct socket RPC, no
-# CLI subprocess spawns); these remain the no-python fallback and speak to
-# herdr through its CLI. Sourced, not executed.
+# (HERDR_PANE_ID first, then the Neovim token, the Vim title marker, and
+# foreground process names). The python scripts are the fast path (direct
+# socket RPC, no CLI subprocess spawns); these remain the no-python fallback
+# and speak to herdr through its CLI. Sourced, not executed.
 
 # Resolve the shared config file path (same precedence as the lua/python
 # sides: HERDR_SPLITS_CONFIG, then HERDR_PLUGIN_CONFIG_DIR, then default).
@@ -21,18 +21,38 @@ herdr_splits_conf_value() {
 }
 
 # herdr_splits_is_vim <herdr_bin> <pane_id>
-# Registration token first (the editor reports editor=nvim via
-# pane.report_metadata with a TTL, so stale registrations expire on the
-# server — the editor side knows what it is, and on Windows process names
-# cannot see through shims/proxy shells at all), then foreground process
-# names for plugin-less vim/gvim panes.
+# True for any editor pane that owns the navigation keys. Detection order:
+# the Neovim token (pane.report_metadata with a TTL, so stale registrations
+# expire server-side), the Vim plugin's title marker (plain Vim has no RPC
+# transport for a token), then foreground process names for plugin-less
+# vim/gvim panes on Unix. On Windows process names below the pane shell are
+# not visible, which is why the title marker exists.
 herdr_splits_is_vim() {
   [ -n "$2" ] || return 1
-  if "$1" pane get "$2" 2>/dev/null \
-      | grep -qE '"tokens"[^}]*"editor"[[:space:]]*:[[:space:]]*"nvim"'; then
+  local pane
+  pane=$("$1" pane get "$2" 2>/dev/null) || return 1
+  if printf '%s' "$pane" | grep -qE '"tokens"[^}]*"editor"[[:space:]]*:[[:space:]]*"nvim"'; then
+    return 0
+  fi
+  if printf '%s' "$pane" | grep -qF '[herdr-splits]'; then
     return 0
   fi
   local info
   info=$("$1" pane process-info --pane "$2" 2>/dev/null) || return 1
   printf '%s' "$info" | grep -qiE '"name"[[:space:]]*:[[:space:]]*"(g?(view|l?n?vim?x?)(diff)?)(\.exe)?"'
+}
+
+# herdr_splits_is_nvim <herdr_bin> <pane_id>
+# Resize is Neovim-only: the Vim adapter has no resize mappings, so a
+# plain-Vim pane must keep pane-level resizing. The title marker is
+# deliberately not consulted here.
+herdr_splits_is_nvim() {
+  [ -n "$2" ] || return 1
+  local pane
+  pane=$("$1" pane get "$2" 2>/dev/null) || return 1
+  if printf '%s' "$pane" | grep -qE '"tokens"[^}]*"editor"[[:space:]]*:[[:space:]]*"nvim"'; then
+    return 0
+  fi
+  "$1" pane process-info --pane "$2" 2>/dev/null \
+    | grep -qiE '"name"[[:space:]]*:[[:space:]]*"nvim(\.exe)?"'
 }

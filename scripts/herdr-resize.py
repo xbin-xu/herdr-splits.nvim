@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """herdr-resize.py — herdr resize helper (herdr-splits fast path).
 
-Same detection as herdr-nav.py (registration token first, process names as
-fallback): vim panes get the chord forwarded (Neovim decides between
-resizing a split and handing off to herdr), plain panes are resized via
+Detection shares herdr_common.pane_editor with herdr-nav.py, but resize is
+Neovim-only: the Vim adapter implements navigation, not resizing, so a
+plain-Vim pane is resized at the Herdr level (otherwise the forwarded
+alt+hjkl would land in Vim unmapped). Neovim decides between resizing its
+own split and handing off to herdr; plain panes are resized via
 `pane.resize` directly. Zoom state is left untouched (matching smart-splits'
 disable_multiplexer_nav_when_zoomed default). Same semantics as
 herdr-resize.sh, the only difference being speed.
@@ -18,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from herdr_common import (  # noqa: E402
     current_pane_id,
     discover_socket_path,
-    is_vim_pane,
+    pane_editor,
     read_config,
     rpc_call,
 )
@@ -43,7 +45,10 @@ def main() -> int:
         print("herdr-resize: could not determine current pane", file=sys.stderr)
         return 1
 
-    if is_vim_pane(sock_path, pane_id):
+    # Resize is Neovim-only: the Vim adapter exposes navigation mappings but
+    # no resize ones, so a plain-Vim pane keeps pane-level resizing (which is
+    # also what it had before title detection existed on Windows).
+    if pane_editor(sock_path, pane_id) == "nvim":
         rpc_call(sock_path, "pane.send_keys", {"pane_id": pane_id, "keys": [cfg["key"]]})
     else:
         rpc_call(sock_path, "pane.resize", {"pane_id": pane_id, "direction": direction, "amount": amount})
