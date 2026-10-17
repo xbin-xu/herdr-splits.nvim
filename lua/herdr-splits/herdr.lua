@@ -148,6 +148,30 @@ local function save_pane_mru(order)
   end
 end
 
+---True when the layout still describes a real tiling. Herdr keeps
+---reporting the pre-zoom pane rectangles while a tab is zoomed, so the
+---search works unchanged; older servers collapsed a zoomed layout to the
+---zoomed pane's full-area rectangle, which cannot be searched.
+---@param rects HerdrSplitsRect[]
+---@return boolean
+local function layout_is_tiled(rects)
+  if #rects < 2 then
+    return false
+  end
+  local seen = {}
+  for _, r in ipairs(rects) do
+    seen[string.format('%d,%d,%d,%d', r.x, r.y, r.w, r.h)] = true
+  end
+  local distinct = 0
+  for _ in pairs(seen) do
+    distinct = distinct + 1
+    if distinct > 1 then
+      return true
+    end
+  end
+  return false
+end
+
 ---tmux-style pane selection: focus the most recently focused pane among the
 ---candidates adjacent in `direction`, using the same rule and the same
 ---fallbacks as scripts/herdr_common.py `mru_focus` (whose caller in
@@ -167,15 +191,15 @@ local function focus_pane_mru(direction)
     return false
   end
   if zoomed then
-    -- A zoomed pane fills the tab, so the layout cannot be searched until
-    -- it is unzoomed. With auto-unzoom disabled the caller falls back to
-    -- Herdr's geometric focus (same as the scripts).
-    if not M.unzoom_enabled() then
-      return false
-    end
-    rpc.call('pane.zoom', { pane_id = cur, mode = 'off' })
-    zoomed, rects = pane_rects()
-    if not rects then
+    if M.unzoom_enabled() then
+      rpc.call('pane.zoom', { pane_id = cur, mode = 'off' })
+      zoomed, rects = pane_rects()
+      if not rects then
+        return false
+      end
+    elseif not layout_is_tiled(rects) then
+      -- A collapsed zoomed layout (older Herdr) has no searchable panes;
+      -- the caller falls back to Herdr's geometric focus.
       return false
     end
   end

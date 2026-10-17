@@ -305,6 +305,18 @@ def _pane_candidates(rects, cur, direction, wrap):
     return out
 
 
+def layout_is_tiled(rects) -> bool:
+    """True when the layout still describes a real tiling.
+
+    Herdr keeps reporting the pre-zoom pane rectangles while a tab is
+    zoomed, so the directional search works unchanged. Older servers
+    collapsed a zoomed layout to the zoomed pane's full-area rectangle
+    (every edge reported reached); with fewer than two distinct rects
+    there is nothing to search, and callers fall back to Herdr's
+    geometric focus."""
+    return len(rects) > 1 and len(set(rects.values())) > 1
+
+
 def _mru_path(config_path) -> Path:
     """Pane MRU state: a small file next to the shared conf, one pane id per
     line, most-recent-first. Each keypress is a fresh process, so cross-
@@ -346,8 +358,10 @@ def mru_focus(sock_path: str, config_path, direction: str, cur_pane: str = None)
     MRU order may lag those by one interaction.
 
     Zoom: with auto-unzoom enabled the pane is unzoomed first and the search
-    runs on the restored layout; with it disabled the layout is unusable and
-    the caller falls back to the legacy path.
+    runs on the restored layout. With it disabled the search still runs when
+    the server keeps reporting the pre-zoom tiling (current Herdr); a
+    collapsed zoomed layout has no candidates, so the caller falls back to
+    the legacy path.
     """
     cur = cur_pane or os.environ.get("HERDR_PANE_ID", "")
     if not cur:
@@ -356,10 +370,11 @@ def mru_focus(sock_path: str, config_path, direction: str, cur_pane: str = None)
 
     zoomed, rects = _pane_layout(sock_path)
     if zoomed:
-        if not cfg.get("unzoom"):
+        if cfg.get("unzoom"):
+            rpc_call(sock_path, "pane.zoom", {"pane_id": cur, "mode": "off"})
+            _, rects = _pane_layout(sock_path)
+        elif not layout_is_tiled(rects):
             return None
-        rpc_call(sock_path, "pane.zoom", {"pane_id": cur, "mode": "off"})
-        _, rects = _pane_layout(sock_path)
 
     cands = _pane_candidates(rects, cur, direction, wrap=False)
     if not cands:

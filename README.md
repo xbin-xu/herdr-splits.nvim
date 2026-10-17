@@ -296,11 +296,12 @@ and `nav_at_edge` (Herdr pane-boundary wrap: `wrap`/`stop`) are two different
 things despite the shared name — `at_edge` is Neovim-side only and is not
 written to the conf.
 
-Note: when a pane is zoomed and `unzoom_on_nav=false`, the edge flags can't be
-trusted so `stop` can't be detected on the plain-pane side — navigation proceeds
-in the requested direction in that case. With the default `unzoom_on_nav=true`,
-pressing toward an edge while zoomed first unzooms the pane (so the edge can be
-detected) and then halts — the pane unzooms even though focus doesn't move.
+With `unzoom_on_nav=false`, navigation leaves the pane zoomed. Herdr keeps
+reporting the pre-zoom pane tiling and edge flags while zoomed, so MRU
+selection and edge wrapping work as usual; focus moves and the zoom follows
+it. With the default `unzoom_on_nav=true`, pressing toward an edge while
+zoomed first unzooms the pane (so the destination is visible) and then halts —
+the pane unzooms even though focus doesn't move.
 
 **To remap the keys forwarded into Neovim**, pass `nav_keys` / `resize_keys`
 to `setup()` in Neovim notation (e.g. `<M-Left>`). Override only the
@@ -437,7 +438,8 @@ decision (MRU, unzoom, wrap) stays in one implementation.
 1. Try moving within the editor (wincmd h/j/k/l)
    ├─ Window changed → done (stayed within the editor's splits)
    └─ Window didn't change → at the editor edge
-        ├─ Zoomed? → unzoom first (neighbours are reliable once visible)
+        ├─ Zoomed? → with auto-unzoom on, unzoom first and retry;
+        │             otherwise use Herdr's pre-zoom layout
         ├─ Check if Herdr is running (HERDR_ENV=1)
         ├─ Check if Herdr pane has a neighbour in this direction
         │   └─ Yes → herdr pane focus --direction → done

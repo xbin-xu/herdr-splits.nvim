@@ -314,10 +314,11 @@ function M.move_cursor(direction, opts)
     return
   end
 
-  -- Check zoom state: unzoom first, then retry Neovim navigation.
-  -- Must happen BEFORE the at_herdr_edge check — when zoomed, the pane fills
-  -- the screen so herdr reports it as being at every edge, making
-  -- at_herdr_edge useless until we unzoom.
+  -- Check zoom state: with auto-unzoom enabled, unzoom first and retry
+  -- Neovim navigation. Must happen BEFORE the at_herdr_edge check so the
+  -- destination pane is visible once we cross. With auto-unzoom disabled
+  -- we stay zoomed; Herdr keeps the pre-zoom layout and edge flags, so the
+  -- checks below remain accurate.
   if herdr.unzoom_enabled() and herdr.current_pane_is_zoomed() then
     herdr.unzoom()
     if embedded then

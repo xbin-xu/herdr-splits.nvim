@@ -25,6 +25,7 @@ from herdr_common import (  # noqa: E402
     current_pane_id,
     discover_socket_path,
     is_vim_pane,
+    layout_is_tiled,
     mru_focus,
     read_config,
     resolve_config_path,
@@ -35,7 +36,7 @@ from herdr_common import (  # noqa: E402
 def try_mru(sock_path: str, config_path: Path, cfg: dict, direction: str, pane_id: str) -> bool:
     """tmux-style pane move when most_recently_focused is on. False hands
     the caller back to Herdr's own focus_direction / edge handling (option
-    off, layout edge, zoom with unzoom disabled, socket error)."""
+    off, collapsed zoomed layout, socket error)."""
     if not cfg["most_recently_focused"]:
         return False
     try:
@@ -82,8 +83,8 @@ def main() -> int:
         return 0
 
     # Plain pane: tmux-style MRU first when opted in; the legacy geometry
-    # below is the fall-through when the search found nothing (edges, zoom
-    # with unzoom disabled, single pane).
+    # below is the fall-through when the search found nothing (edges,
+    # collapsed zoomed layout, single pane).
     if try_mru(sock_path, config_path, cfg, direction, pane_id):
         return 0
 
@@ -105,7 +106,18 @@ def main() -> int:
             rpc_call(sock_path, "pane.zoom", {"pane_id": pane_id, "mode": "off"})
             edges = edges_of(rpc_call(sock_path, "pane.edges", {"pane_id": pane_id}))
         else:
-            edges_trusted = False  # zoomed pane reports itself at every edge
+            # Current Herdr keeps the pre-zoom tiling and accurate edge
+            # flags while zoomed. Only a collapsed layout (older servers:
+            # the zoomed pane alone, every edge reported reached) cannot
+            # drive a wrap.
+            panes = edges.get("layout", {}).get("panes", [])
+            rects = {
+                p.get("pane_id"): tuple(
+                    p.get("rect", {}).get(k, 0) for k in ("x", "y", "width", "height")
+                )
+                for p in panes
+            }
+            edges_trusted = layout_is_tiled(rects)
 
     if edges_trusted and edges.get(direction):
         if cfg["nav_at_edge"] == "stop":

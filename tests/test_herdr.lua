@@ -380,4 +380,56 @@ T['wrap-cross flips to the opposite-boundary panes, not the reverse-nearest'] = 
   })
 end
 
+T['searches the pre-zoom layout when auto-unzoom is disabled'] = function()
+  local result = child.lua_func(function()
+    vim.env.HERDR_ENV = '1'
+    vim.env.HERDR_PANE_ID = 'A'
+    local tmpdir = vim.fn.tempname()
+    vim.fn.mkdir(tmpdir, 'p')
+    vim.env.HERDR_SPLITS_CONFIG = tmpdir .. '/conf'
+
+    local zoomed_layout = {
+      result = {
+        layout = {
+          zoomed = true,
+          panes = {
+            { pane_id = 'A', rect = { x = 0, y = 0, width = 40, height = 20 } },
+            { pane_id = 'B', rect = { x = 40, y = 0, width = 40, height = 20 } },
+          },
+        },
+      },
+    }
+    local calls = {}
+    package.loaded['herdr-splits.rpc'] = {
+      call = function(method, params)
+        calls[#calls + 1] = { method = method, params = vim.deepcopy(params) }
+        if method == 'pane.layout' then
+          return zoomed_layout
+        end
+        return { result = {} }
+      end,
+    }
+    local config = require('herdr-splits.config')
+    config.most_recently_focused = true
+    config.unzoom_on_nav = false
+    config.nav_at_edge = 'wrap'
+    package.loaded['herdr-splits.herdr'] = nil
+    local herdr = require('herdr-splits.herdr')
+
+    -- C-h at the left Herdr edge wraps to B. Herdr keeps reporting the
+    -- pre-zoom tiling, so the search needs no unzoom.
+    local ok = herdr.focus_pane_wrap('left')
+    vim.fn.delete(tmpdir, 'rf')
+    return { ok = ok, calls = calls }
+  end)
+
+  expect.equality(result, {
+    ok = true,
+    calls = {
+      { method = 'pane.layout', params = {} },
+      { method = 'pane.focus', params = { pane_id = 'B' } },
+    },
+  })
+end
+
 return T
