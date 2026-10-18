@@ -25,8 +25,13 @@ platforms = ["linux", "macos", "windows"]
 #
 # `herdr plugin link` does not run build commands, so after linking a local
 # checkout build the helper yourself:
-#   cargo build --release --manifest-path rust/Cargo.toml
-#   cargo run --release --manifest-path rust/Cargo.toml -- install
+#   make build          # or: sh scripts/build.sh / pwsh -File scripts\build.ps1
+#
+# The build commands below run on `herdr plugin install`. They only need a Rust
+# toolchain: the crate has no dependencies, so no network access and, on
+# Windows, no Visual Studio -- the GNU toolchain and MinGW's gcc are enough.
+# If `cargo` is not on the PATH the herdr server inherited, run `make build`
+# first; `install` then finds the binary already in place.
 
 [[build]]
 command = ["cargo", "build", "--release", "--locked", "--manifest-path", "rust/Cargo.toml"]

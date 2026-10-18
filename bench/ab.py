@@ -6,7 +6,7 @@ path with the socket stubbed out, so the measurement is process start-up plus
 the work this project actually owns:
 
 * Python: `python -S scripts/herdr-nav.py left`, transport monkey-patched onto
-  a canned responder (see `harness.py` in herdr-splits-slim for the same trick);
+  a canned responder (the harness below writes that responder to `harness.py`);
 * Rust: `scripts/bin/herdr-splits nav left --replay <fixture>`, the binary's own
   built-in replay transport.
 

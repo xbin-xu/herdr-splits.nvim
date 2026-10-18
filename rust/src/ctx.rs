@@ -192,12 +192,12 @@ mod tests {
     #[test]
     fn windows_pipe_prefix_is_added_once() {
         assert_eq!(
-            windows_pipe_name("C:\\x\\herdr.sock"),
-            r"\\.\pipe\C:\x\herdr.sock"
+            windows_pipe_name(r"C:\tmp\herdr.sock"),
+            r"\\.\pipe\C:\tmp\herdr.sock"
         );
         assert_eq!(
-            windows_pipe_name(r"\\.\pipe\C:\x\herdr.sock"),
-            r"\\.\pipe\C:\x\herdr.sock"
+            windows_pipe_name(r"\\.\pipe\C:\tmp\herdr.sock"),
+            r"\\.\pipe\C:\tmp\herdr.sock"
         );
     }
 

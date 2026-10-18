@@ -52,14 +52,14 @@ jobs:
           cargo run --release --locked --quiet --manifest-path rust/Cargo.toml -- install
           test -f scripts/bin/herdr-splits
           ./scripts/bin/herdr-splits --version
+      # Replays a checked-in fixture rather than a fixture written inline, so CI
+      # exercises the reply shapes the repository documents instead of shapes
+      # that only exist in this workflow.
       - name: Probe the wire protocol without a server
         shell: bash
         run: |
-          printf '%s\n' \
-            '{"method":"pane.get","response":{"result":{"pane":{"tokens":{"editor":"nvim"}}}}}' \
-            '{"method":"pane.send_keys","response":{"result":{}}}' > /tmp/fixture.jsonl
           HERDR_PANE_ID=A ./scripts/bin/herdr-splits nav left \
-            --replay /tmp/fixture.jsonl --trace /tmp/trace.log
+            --replay tests/fixtures/nav-nvim.jsonl --trace /tmp/trace.log
           test "$(cut -f1 /tmp/trace.log | tr '\n' ' ')" = "pane.get pane.send_keys "
 
   test:

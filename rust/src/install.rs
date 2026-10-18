@@ -63,10 +63,16 @@ pub fn install(exe: &Path, root: &Path) -> std::io::Result<InstallOutcome> {
     if let Some(parent) = destination.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    // Copy through a temp file so a concurrent keypress never runs a
-    // half-written binary.
+    // Read the image once, up front. The binary is a few hundred kilobytes, and
+    // holding it in memory makes the write below a plain local file write
+    // instead of a copy between two paths that may be on different volumes
+    // (`CARGO_TARGET_DIR` on another drive is a supported setup).
+    let image = std::fs::read(exe)?;
+    // Write through a temp file in the destination directory so a concurrent
+    // keypress never runs a half-written binary, and so the rename below can
+    // never cross a volume boundary.
     let temp = destination.with_extension(format!("tmp-{}", std::process::id()));
-    std::fs::copy(exe, &temp)?;
+    std::fs::write(&temp, &image)?;
     // Unix needs the executable bit; Windows has no equivalent and the copy
     // already inherits read/execute for the owner.
     #[cfg(unix)]
@@ -87,15 +93,17 @@ pub fn install(exe: &Path, root: &Path) -> std::io::Result<InstallOutcome> {
             }
             Err(err) => {
                 // Not every platform lets a rename replace an existing file;
-                // a direct copy is the fallback either way.
-                match std::fs::copy(exe, &destination) {
-                    Ok(_) => {
+                // rewriting the destination in place is the fallback either
+                // way. It still writes bytes we already hold, never re-reads
+                // the source.
+                match std::fs::write(&destination, &image) {
+                    Ok(()) => {
                         last_error = None;
                         break;
                     }
-                    Err(copy_error) => {
+                    Err(write_error) => {
                         last_error = Some(if attempt + 1 == RETRIES {
-                            copy_error
+                            write_error
                         } else {
                             err
                         });
@@ -116,8 +124,8 @@ pub fn install(exe: &Path, root: &Path) -> std::io::Result<InstallOutcome> {
         // it tracks the extensionless copy instead of drifting.
         let mirror = destination.with_extension("exe");
         for attempt in 0..RETRIES {
-            match std::fs::copy(&destination, &mirror) {
-                Ok(_) => break,
+            match std::fs::write(&mirror, &image) {
+                Ok(()) => break,
                 Err(_) if attempt + 1 < RETRIES => std::thread::sleep(RETRY_DELAY),
                 // Not fatal: herdr's own invocation does not need the mirror.
                 Err(_) => {
@@ -188,9 +196,38 @@ mod tests {
 
     #[test]
     fn a_tree_without_the_marker_has_no_root() {
-        let root = temp_root("no-marker");
-        assert_eq!(guess_root(&root.join("herdr-splits"), None), None);
-        let _ = std::fs::remove_dir_all(&root);
+        // The probe path must not sit under a plugin checkout: `guess_root`
+        // walks up from the executable, so a directory inside this repository
+        // would legitimately find *our* herdr-plugin.toml and the assertion
+        // would test the checkout layout instead of the missing marker.
+        let outside = std::env::temp_dir()
+            .join("herdr-splits-no-marker-probe")
+            .join("herdr-splits");
+        assert_eq!(guess_root(&outside, None), None);
+    }
+
+    #[test]
+    fn the_walk_stops_at_the_nearest_marker() {
+        // Nested checkouts: the innermost marker wins, so a vendored copy does
+        // not install into its parent.
+        let outer = temp_root("nested-outer");
+        let inner = outer.join("vendor").join("inner");
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::write(outer.join("herdr-plugin.toml"), "id = \"outer\"").unwrap();
+        std::fs::write(inner.join("herdr-plugin.toml"), "id = \"inner\"").unwrap();
+        let exe = inner.join("target/release/herdr-splits");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"stub").unwrap();
+
+        // `guess_root` canonicalises the executable, so compare canonical
+        // paths rather than the raw ones (Windows may differ in case or have a
+        // `\\?\` prefix).
+        assert_eq!(
+            guess_root(&exe, None).map(|path| path.canonicalize().unwrap()),
+            Some(inner.canonicalize().unwrap()),
+            "the nearest marker must win"
+        );
+        let _ = std::fs::remove_dir_all(&outer);
     }
 
     #[test]

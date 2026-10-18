@@ -516,8 +516,9 @@ impl<'a> Parser<'a> {
 mod tests {
     use super::*;
 
-    /// Payload shapes copied from `herdr-splits-slim/bench/equiv.py`, which is
-    /// the equivalence harness the Python side already trusts.
+    /// Reply shapes the helper has to decode, as herdr actually sends them.
+    /// `tests/fixtures/nav-nvim.jsonl` wraps the same shapes in the replay
+    /// envelope (`{"method":…,"response":…}`) for the end-to-end tests and CI.
     const PAYLOADS: &[&str] = &[
         r#"{"id":"req","result":{"pane":{"pane_id":"w1:p1","tokens":{"editor":"nvim"},"terminal_title_stripped":"x [herdr-splits] y"}}}"#,
         r#"{"id":"req","result":{"edges":{"left":true,"right":false,"up":true,"down":true,"pane_id":"A","layout":{"zoomed":false,"panes":[{"pane_id":"A","rect":{"x":0,"y":0,"width":40,"height":20}},{"pane_id":"B","rect":{"x":40,"y":0,"width":40,"height":20}}]}}}}"#,

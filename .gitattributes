@@ -1,0 +1,6 @@
+* text=auto eol=lf
+
+# Never convert these, whatever their extension suggests.
+*.png binary
+*.ico binary
+*.jpg binary

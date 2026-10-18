@@ -28,17 +28,17 @@ check-shell:
 	bash -n "$(ROOT)/scripts/herdr-common.sh"
 	bash -n "$(ROOT)/scripts/herdr-nav.sh"
 	bash -n "$(ROOT)/scripts/herdr-resize.sh"
+	sh -n "$(ROOT)/scripts/build.sh"
 
 # Build the Herdr-side helper and install it where the manifest expects it.
 # `herdr plugin link` does not run the manifest's [[build]] commands, so this is
 # the local-development entry point. Release profile is what the actions run.
+#
+# Delegates to scripts/build.sh so the `--root` handling lives in exactly one
+# place: without it, `install` walks up from `current_exe()` and fails whenever
+# CARGO_TARGET_DIR puts the binary outside the checkout.
 build:
-	@command -v "$(CARGO)" >/dev/null 2>&1 || { \
-		echo "cargo not found: install Rust (https://rustup.rs) and put ~/.cargo/bin on PATH"; \
-		exit 1; \
-	}
-	"$(CARGO)" build --release --locked --manifest-path "$(ROOT)/rust/Cargo.toml"
-	"$(CARGO)" run --release --locked --quiet --manifest-path "$(ROOT)/rust/Cargo.toml" -- install
+	sh "$(ROOT)/scripts/build.sh"
 
 test-rust:
 	@command -v "$(CARGO)" >/dev/null 2>&1 || { \
