@@ -1,0 +1,10 @@
+{"method":"pane.get","response":{"result":{"pane":{"pane_id":"A","tokens":{"editor":"nvim"},"terminal_title_stripped":"main.rs - NVIM"}}}}
+{"method":"pane.process_info","response":{"result":{"process_info":{"pane_id":"A","shell_pid":100,"foreground_processes":[{"name":"nvim.exe","pid":200}]}}}}
+{"method":"pane.send_keys","response":{"result":{}}}
+{"method":"pane.edges","response":{"result":{"edges":{"pane_id":"A","left":true,"right":false,"up":true,"down":true,"layout":{"zoomed":false,"panes":[{"pane_id":"A","rect":{"x":0,"y":0,"width":40,"height":20}},{"pane_id":"B","rect":{"x":40,"y":0,"width":40,"height":20}}]}}}}}
+{"method":"pane.layout","response":{"result":{"layout":{"zoomed":false,"panes":[{"pane_id":"A","rect":{"x":0,"y":0,"width":40,"height":20}},{"pane_id":"B","rect":{"x":40,"y":0,"width":40,"height":20}}]}}}}
+{"method":"pane.current","response":{"result":{"pane":{"pane_id":"A"}}}}
+{"method":"pane.focus","response":{"result":{}}}
+{"method":"pane.focus_direction","response":{"result":{}}}
+{"method":"pane.zoom","response":{"result":{}}}
+{"method":"pane.resize","response":{"result":{}}}

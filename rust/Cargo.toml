@@ -1,0 +1,21 @@
+[package]
+name = "herdr-splits"
+version = "0.6.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Herdr-side navigation/resize helper for herdr-splits.nvim (control-socket RPC, no CLI spawns)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "herdr-splits"
+path = "src/main.rs"
+
+# Small and fast to start: the whole product is "be done before the user
+# notices". No dependencies on purpose — installs must build offline.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
