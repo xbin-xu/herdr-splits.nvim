@@ -1,1 +1,7 @@
 .pi-subagents/
+
+# Rust helper build artifacts. `scripts/bin/` holds the installed binary, which
+# the manifest's build commands produce; `Cargo.lock` IS committed so installs
+# resolve identically.
+rust/target/
+scripts/bin/

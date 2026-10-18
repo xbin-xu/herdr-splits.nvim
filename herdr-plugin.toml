@@ -1,7 +1,7 @@
 id = "herdr-splits"
 name = "Herdr Splits"
-version = "0.5.3"
-min_herdr_version = "0.7.0"
+version = "0.6.0"
+min_herdr_version = "0.8.0"
 description = "Seamless navigation between Herdr panes and Neovim/Vim splits, with native Neovim resizing"
 platforms = ["linux", "macos", "windows"]
 
@@ -13,51 +13,71 @@ platforms = ["linux", "macos", "windows"]
 #   key = "ctrl+h"
 #   type = "plugin_action"
 #   command = "herdr-splits.nav-left"
+#
+# The actions run the Rust helper built from `rust/`. It talks to the control
+# socket directly (no `herdr` CLI subprocesses), which is what keeps a keypress
+# at ~10 ms on Windows instead of the ~50 ms a `python -S` start-up costs.
+#
+# `scripts/bin/herdr-splits` deliberately has no extension on any platform:
+# herdr resolves a relative command against the plugin root and canonicalises
+# it, and Windows then runs that exact path without appending PATHEXT variants.
+# An extensionless executable works there; `herdr-splits.exe` would not.
+#
+# `herdr plugin link` does not run build commands, so after linking a local
+# checkout build the helper yourself:
+#   cargo build --release --manifest-path rust/Cargo.toml
+#   cargo run --release --manifest-path rust/Cargo.toml -- install
+
+[[build]]
+command = ["cargo", "build", "--release", "--locked", "--manifest-path", "rust/Cargo.toml"]
+
+[[build]]
+command = ["cargo", "run", "--release", "--locked", "--quiet", "--manifest-path", "rust/Cargo.toml", "--", "install"]
 
 [[actions]]
 id = "nav-left"
 title = "Navigate left (editor/Herdr)"
 contexts = ["global"]
-command = ["python", "-S", "scripts/herdr-nav.py", "left"]
+command = ["scripts/bin/herdr-splits", "nav", "left"]
 
 [[actions]]
 id = "nav-down"
 title = "Navigate down (editor/Herdr)"
 contexts = ["global"]
-command = ["python", "-S", "scripts/herdr-nav.py", "down"]
+command = ["scripts/bin/herdr-splits", "nav", "down"]
 
 [[actions]]
 id = "nav-up"
 title = "Navigate up (editor/Herdr)"
 contexts = ["global"]
-command = ["python", "-S", "scripts/herdr-nav.py", "up"]
+command = ["scripts/bin/herdr-splits", "nav", "up"]
 
 [[actions]]
 id = "nav-right"
 title = "Navigate right (editor/Herdr)"
 contexts = ["global"]
-command = ["python", "-S", "scripts/herdr-nav.py", "right"]
+command = ["scripts/bin/herdr-splits", "nav", "right"]
 
 [[actions]]
 id = "resize-left"
 title = "Resize left (Neovim/Herder)"
 contexts = ["global"]
-command = ["python", "-S", "scripts/herdr-resize.py", "left"]
+command = ["scripts/bin/herdr-splits", "resize", "left"]
 
 [[actions]]
 id = "resize-down"
 title = "Resize down (Neovim/Herder)"
 contexts = ["global"]
-command = ["python", "-S", "scripts/herdr-resize.py", "down"]
+command = ["scripts/bin/herdr-splits", "resize", "down"]
 
 [[actions]]
 id = "resize-up"
 title = "Resize up (Neovim/Herder)"
 contexts = ["global"]
-command = ["python", "-S", "scripts/herdr-resize.py", "up"]
+command = ["scripts/bin/herdr-splits", "resize", "up"]
 
 [[actions]]
 id = "resize-right"
 title = "Resize right (Neovim/Herder)"
 contexts = ["global"]
-command = ["python", "-S", "scripts/herdr-resize.py", "right"]
+command = ["scripts/bin/herdr-splits", "resize", "right"]
