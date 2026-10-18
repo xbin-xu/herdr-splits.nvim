@@ -5,9 +5,10 @@
 " and Vim cannot reach Herdr's control pipe directly (ch_open rejects
 " \\.\pipe\... — E475 on the MSYS and win32 builds alike). So at the split
 " edge the direction is handed to the project's own pane-level entry point,
-" scripts/herdr-nav.py --pane-only <direction>, which carries all of the
-" semantics (most_recently_focused, unzoom_on_nav, nav_at_edge) and shares
-" the mru-panes state with the Neovim side.
+" `scripts/bin/herdr-splits nav --pane-only <direction>` (or the Python
+" fallback, scripts/herdr-nav.py), which carries all of the semantics
+" (most_recently_focused, unzoom_on_nav, nav_at_edge) and shares the
+" mru-panes state with the Neovim side.
 "
 " Public entry point: herdr_splits#nav('h'|'j'|'k'|'l'). Mappings are
 " defined by plugin/herdr-splits.vim, only inside a Herdr pane.
@@ -145,26 +146,42 @@ function! s:move_mru(key) abort
   return !empty(cands) && win_gotoid(s:mru_pick(cands))
 endfunction
 
-" Path to scripts/herdr-nav.py, or '' when missing. An explicit
-" g:herdr_splits_script always wins; otherwise use this checkout's own copy,
-" so the Vim adapter and the helper it drives are the same commit (the same
-" principle as lua/herdr-splits/paths.lua).
-function! s:nav_script() abort
+" Command (as an argv list) for the edge hand-off, or [] when nothing usable
+" is installed. Preference order:
+"   1. g:herdr_splits_bin — explicit pointer at the Rust helper,
+"   2. this checkout's own build: scripts/bin/herdr-splits (the same binary the
+"      Herdr-side actions run, ~10 ms instead of ~50 ms for a Python start),
+"   3. the Python reference implementation, for a checkout that has not been
+"      built yet (g:herdr_splits_script, else the shipped scripts/herdr-nav.py).
+function! s:nav_command(direction) abort
+  let bin = get(g:, 'herdr_splits_bin', '')
+  if empty(bin)
+    let candidate = s:root . '/scripts/bin/herdr-splits'
+    if executable(candidate)
+      let bin = candidate
+    endif
+  endif
+  if !empty(bin)
+    return [bin, 'nav', '--pane-only', a:direction]
+  endif
+
   let script = get(g:, 'herdr_splits_script', '')
   if empty(script)
     let script = s:root . '/scripts/herdr-nav.py'
   endif
-  return filereadable(script) ? script : ''
+  if filereadable(script)
+    return [get(g:, 'herdr_splits_python', 'python'), '-S', script, '--pane-only', a:direction]
+  endif
+  return []
 endfunction
 
 " Edge hand-off. Runs when wincmd could not move (Vim is at its edge) and
-" $HERDR_ENV == 1. The pane-level decision belongs to herdr's own
-" --pane-only entry point, so this stays glue: spawn it async so the
-" keypress never blocks on the ~50ms python start (system() is unusable
-" from Vim on Windows — verified: empty output / wrong exit codes — hence
-" job_start()).
-" Failures — script unresolved, interpreter missing, non-zero exit — warn
-" once via echom, then stay silent; a clean run re-arms the warning.
+" $HERDR_ENV == 1. The pane-level decision belongs to the helper's
+" --pane-only entry point, so this stays glue: spawn it async so the keypress
+" never blocks (system() is unusable from Vim on Windows — verified: empty
+" output / wrong exit codes — hence job_start()).
+" Failures — no helper found, interpreter missing, non-zero exit — warn once
+" via echom, then stay silent; a clean run re-arms the warning.
 function! s:warn_handoff(msg) abort
   if s:handoff_warn_armed
     let s:handoff_warn_armed = 0
@@ -176,19 +193,21 @@ function! s:on_handoff_exit(job, status) abort
   if a:status == 0
     let s:handoff_warn_armed = 1
   else
-    call s:warn_handoff('herdr-nav.py --pane-only exited with ' . a:status)
+    call s:warn_handoff('edge hand-off exited with ' . a:status)
   endif
 endfunction
 
 function! s:edge_handoff(direction) abort
-  let l:script = s:nav_script()
-  if empty(l:script)
-    call s:warn_handoff('herdr-nav.py not found (reinstall the plugin, or set g:herdr_splits_script)')
+  let l:command = s:nav_command(a:direction)
+  if empty(l:command)
+    call s:warn_handoff('no navigation helper found (build it: cargo build --release '
+          \ . '--manifest-path rust/Cargo.toml, then cargo run --release '
+          \ . '--manifest-path rust/Cargo.toml -- install)')
     return
   endif
   try
     let l:job = job_start(
-          \ [get(g:, 'herdr_splits_python', 'python'), '-S', l:script, '--pane-only', a:direction],
+          \ l:command,
           \ {'out_io': 'null', 'err_io': 'null',
           \  'exit_cb': function('s:on_handoff_exit')})
   catch
@@ -196,7 +215,7 @@ function! s:edge_handoff(direction) abort
     return
   endtry
   if job_status(l:job) ==# 'fail'
-    call s:warn_handoff('could not start ' . get(g:, 'herdr_splits_python', 'python'))
+    call s:warn_handoff('could not start ' . l:command[0])
   endif
 endfunction
 

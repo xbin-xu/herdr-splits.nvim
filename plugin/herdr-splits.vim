@@ -14,12 +14,16 @@ if exists('g:loaded_herdr_splits')
 endif
 let g:loaded_herdr_splits = 1
 
-" Interpreter for scripts/herdr-nav.py; override in your vimrc before the
-" plugin loads if python is not on PATH.
+" Navigation helper for the edge hand-off. Empty means "use this checkout's
+" own build" (scripts/bin/herdr-splits, produced by the manifest's build
+" commands); set it to an absolute path to use a different build.
+let g:herdr_splits_bin = get(g:, 'herdr_splits_bin', '')
+" Fallback only: interpreter and script used when the Rust helper has not been
+" built in this checkout. Override in your vimrc before the plugin loads if
+" python is not on PATH.
 let g:herdr_splits_python = get(g:, 'herdr_splits_python', 'python')
 " Optional explicit path to herdr-nav.py; empty uses the copy shipped in this
-" plugin's own checkout (scripts/herdr-nav.py), so the adapter and the helper
-" it drives always match.
+" plugin's own checkout (scripts/herdr-nav.py).
 let g:herdr_splits_script = get(g:, 'herdr_splits_script', '')
 
 " Advertise this plugin in the terminal title. nvim registers a TTL'd pane

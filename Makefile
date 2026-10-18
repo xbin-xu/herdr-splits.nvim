@@ -2,8 +2,9 @@ ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 NVIM ?= nvim
 VIM ?= vim
 PYTHON ?= python
+CARGO ?= cargo
 
-.PHONY: deps test test-vim test-py check-shell check
+.PHONY: deps test test-vim test-py check-shell build test-rust fmt clippy check
 
 deps:
 	@if git -C "$(ROOT)" ls-files --error-unmatch deps/mini.test >/dev/null 2>&1; then \
@@ -28,4 +29,28 @@ check-shell:
 	bash -n "$(ROOT)/scripts/herdr-nav.sh"
 	bash -n "$(ROOT)/scripts/herdr-resize.sh"
 
-check: check-shell test test-vim test-py
+# Build the Herdr-side helper and install it where the manifest expects it.
+# `herdr plugin link` does not run the manifest's [[build]] commands, so this is
+# the local-development entry point. Release profile is what the actions run.
+build:
+	@command -v "$(CARGO)" >/dev/null 2>&1 || { \
+		echo "cargo not found: install Rust (https://rustup.rs) and put ~/.cargo/bin on PATH"; \
+		exit 1; \
+	}
+	"$(CARGO)" build --release --locked --manifest-path "$(ROOT)/rust/Cargo.toml"
+	"$(CARGO)" run --release --locked --quiet --manifest-path "$(ROOT)/rust/Cargo.toml" -- install
+
+test-rust:
+	@command -v "$(CARGO)" >/dev/null 2>&1 || { \
+		echo "cargo not found: skipping Rust tests (install Rust to run them)"; \
+		exit 0; \
+	}
+	"$(CARGO)" test --locked --manifest-path "$(ROOT)/rust/Cargo.toml"
+
+fmt:
+	"$(CARGO)" fmt --manifest-path "$(ROOT)/rust/Cargo.toml"
+
+clippy:
+	"$(CARGO)" clippy --all-targets --locked --manifest-path "$(ROOT)/rust/Cargo.toml" -- -D warnings
+
+check: check-shell test test-vim test-py test-rust

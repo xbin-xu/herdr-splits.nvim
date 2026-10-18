@@ -29,10 +29,18 @@ Inspired by [smart-splits.nvim](https://github.com/mrjones2014/smart-splits.nvim
 
 - Neovim ≥ 0.10 for the Lua plugin, **or** Vim ≥ 8.1 with `+job` for
   plain-Vim navigation
-- [Herdr](https://herdr.dev) ≥ 0.7.0 (for plugin actions)
-- Python 3 on `PATH` — the Herdr-side plugin actions run `python -S scripts/*.py`
-  (direct socket RPC; the `.sh` scripts remain as a no-python fallback). Plain
-  Vim also uses it for the edge handoff.
+- [Herdr](https://herdr.dev) ≥ 0.8.0 (for plugin actions)
+- **Rust to build the Herdr side.** A `[[build]]` hook compiles `rust/` into
+  `scripts/bin/herdr-splits` during `herdr plugin install`. The crate has no
+  dependencies, so the build needs no network access once the toolchain is
+  installed. For a linked checkout, run `scripts/build.sh` /
+  `scripts\build.ps1` once (see [Local development](#local-development)).
+  The helper is what keeps a keypress at ~10 ms; the `python -S` start it
+  replaced cost ~50 ms on Windows, more than the RPC work itself.
+
+The Python scripts (`scripts/herdr-*.py`) and bash scripts (`scripts/herdr-*.sh`)
+stay in the tree as the reference implementation and the no-toolchain fallback;
+the Herdr actions no longer invoke them.
 
 ## Installation
 
@@ -43,11 +51,13 @@ Three steps — install on both the Herdr side and the Neovim side, then add key
 This provides the `nav-*` and `resize-*` actions that Herdr keybinds invoke.
 
 ```bash
-# From GitHub (once published):
+# From GitHub (once published). Runs the [[build]] commands, which compile the
+# Rust helper and install it as scripts/bin/herdr-splits:
 herdr plugin install lmilojevicc/herdr-splits.nvim
 
-# Local development:
+# Local development (build commands do NOT run on link — build it yourself):
 herdr plugin link /path/to/herdr-splits
+/path/to/herdr-splits/scripts/build.sh
 ```
 
 ### 2. Install the Neovim plugin
@@ -146,14 +156,17 @@ Inside a Herdr pane the plugin:
 - reads `most_recently_focused` from the shared `herdr-splits.conf` written by
   the Neovim `setup()` (override per editor with
   `let g:herdr_splits_most_recently_focused = 0` or `1`);
-- hands the direction to `scripts/herdr-nav.py --pane-only` asynchronously when
-  Vim is at its edge (Python is required for this step).
+- hands the direction to `scripts/bin/herdr-splits nav --pane-only` (the same
+  Rust helper the Herdr actions run) asynchronously when Vim is at its edge.
+  If the helper has not been built, it falls back to
+  `python -S scripts/herdr-nav.py --pane-only`.
 
 Configuration (set before the plugin loads):
 
 ```vim
-let g:herdr_splits_python = 'python'          " interpreter for the edge handoff
-let g:herdr_splits_script = ''                " optional explicit herdr-nav.py
+let g:herdr_splits_bin = ''                   " explicit helper path (default: this checkout's build)
+let g:herdr_splits_python = 'python'          " fallback interpreter, only if the helper is missing
+let g:herdr_splits_script = ''                " fallback herdr-nav.py path
 let g:herdr_splits_most_recently_focused = 1  " override the shared conf
 ```
 
@@ -333,13 +346,28 @@ require('herdr-splits').setup({
 Both sides load straight from your clone, so edits take effect immediately
 (on the Herdr side; Neovim picks them up on reload/restart).
 
-1. **Link the Herdr plugin** to your local repo:
+1. **Build the Herdr-side helper.** `herdr plugin link` does not run the
+   manifest's `[[build]]` commands, so do it once by hand:
+
+   ```bash
+   # Linux / macOS
+   ./scripts/build.sh
+
+   # Windows
+   pwsh -File scripts\build.ps1
+   ```
+
+   This is `cargo build --release` followed by
+   `cargo run --release -- install`, which copies the binary to
+   `scripts/bin/herdr-splits`. Re-run it after changing `rust/`.
+
+2. **Link the Herdr plugin** to your local repo:
 
    ```bash
    herdr plugin link /path/to/herdr-splits
    ```
 
-2. **Point lazy.nvim at the same path** — change the first line of the spec
+3. **Point lazy.nvim at the same path** — change the first line of the spec
    from the GitHub repo to `dir`:
 
    ```lua
@@ -354,6 +382,35 @@ Run `herdr plugin list` to confirm it shows `herdr-splits ... [local:/...]`.
 To switch back to the published version: `herdr plugin unlink herdr-splits`,
 then `herdr plugin install lmilojevicc/herdr-splits.nvim`, and revert the
 lazy spec to `'lmilojevicc/herdr-splits.nvim'`.
+
+Useful commands while iterating:
+
+```bash
+make build         # cargo build --release + install into scripts/bin/
+make test-rust     # unit + end-to-end tests (no herdr server needed)
+make check         # everything: shell, Lua, Vim, Python, Rust
+
+scripts/bin/herdr-splits doctor    # resolved socket/conf/pane + RPC probe
+```
+
+`doctor` is the fastest way to see what a keypress would do: it prints the
+resolved socket and conf paths, the current pane, the detected editor, and
+whether the socket actually answers.
+
+### Debugging the helper
+
+Every RPC call can be recorded. This works without a running server too, using
+a scripted fixture:
+
+```bash
+# Record what a real keypress does:
+HERDR_PANE_ID=w1:p1 scripts/bin/herdr-splits nav left --trace /tmp/trace.log
+
+# Replay a fixture instead of talking to herdr (what the tests do):
+scripts/bin/herdr-splits nav left --replay tests/fixtures/nav-nvim.jsonl --trace /tmp/trace.log
+```
+
+Each trace line is `method<TAB>params-json<TAB>ok|error`.
 
 ## Lua API
 
@@ -415,6 +472,8 @@ You press C-h in a Herdr pane:
 
   ┌─ Herdr intercepts the key (plugin_action keybind)
   │
+  ├─ scripts/bin/herdr-splits nav left   (Rust helper, ~10 ms)
+  │
   ├─ Is the focused pane running an editor (Neovim / plain Vim with this plugin)?
   │   │
   │   ├─ YES → forward "ctrl+h" into that pane
@@ -422,15 +481,17 @@ You press C-h in a Herdr pane:
   │   │              ├─ Has a window to the left? → wincmd h
   │   │              └─ At the editor edge? → cross into the Herdr pane
   │   │
-  │   └─ NO (plain shell, etc.) → herdr pane focus --direction left
+  │   └─ NO (plain shell, etc.) → pane.focus_direction left
   │
   └─ Result: same keys move you everywhere
 ```
 
-Neovim performs the edge crossing in-process over the control socket. Plain Vim
-cannot open Herdr's socket from Vimscript, so at its edge it spawns
-`scripts/herdr-nav.py --pane-only` (direct RPC) asynchronously; the pane-level
-decision (MRU, unzoom, wrap) stays in one implementation.
+Both sides talk to Herdr's control socket directly — one NDJSON request per
+connection, no `herdr` CLI subprocesses. Neovim does its edge crossing in-process
+(`lua/herdr-splits/rpc.lua`); the Herdr-side actions and plain Vim's edge
+hand-off use the same protocol from Rust (`rust/src/rpc.rs`). Pane-level
+decisions (MRU, unzoom, wrap) live in one implementation per layer and share the
+same `mru-panes` state file.
 
 ### Navigation
 
@@ -458,7 +519,7 @@ apply in plain Vim.
 
 ```text
 1. Only one Neovim window in this dimension AND fills terminal?
-   └─ Yes → herdr pane resize --direction --amount <ratio> → done
+   └─ Yes → pane.resize <direction> <amount> → done
 2. Otherwise:
    └─ Native Neovim resize with position-aware +/- operators
 ```
@@ -466,6 +527,69 @@ apply in plain Vim.
 Plain Vim is treated like a plain pane for resizing: the `resize-*` actions
 resize the Herdr pane directly, because the Vim adapter implements navigation
 but no resize mappings.
+
+### Herdr-side helper
+
+`scripts/bin/herdr-splits` is the only thing a keypress runs on the Herdr side
+(and what plain Vim spawns at its edge). It is a dependency-free Rust binary:
+
+| Subcommand | What it does |
+| --- | --- |
+| `nav <dir> [--pane-only]` | the navigation decision tree, then `pane.send_keys`, `pane.focus` or `pane.focus_direction` |
+| `resize <dir> [amount]` | forward the chord to Neovim, or `pane.resize` (default amount `0.03`) |
+| `install [--root DIR]` | copy itself to `<plugin>/scripts/bin/herdr-splits` |
+| `doctor` | print resolved socket/conf/pane and probe the server |
+
+Exit codes match the Python scripts it replaced: `0` done (including "at the
+edge, nothing to do"), `1` herdr unreachable / no current pane / RPC failure,
+`2` usage error. Successful runs print nothing; herdr captures the action's
+output into its plugin log.
+
+**Compatibility with `scripts/herdr-nav.py` / `herdr-resize.py`.** The RPC
+sequence, exit codes and edge/zoom decisions are identical (the fixtures in
+`rust/tests` are transcribed from the Python unit tests). Three cosmetic
+differences:
+
+1. A failure *after* the first call prints one line
+   (`herdr-splits nav: pane.edges failed: …`) and exits 1, instead of a Python
+   traceback;
+2. an unparsable `amount` prints `herdr-splits resize: invalid amount: '…'` and
+   exits 2, instead of a traceback;
+3. messages are prefixed `herdr-splits nav:` / `herdr-splits resize:` rather
+   than `herdr-nav:` / `herdr-resize:`.
+
+The vim-process-name matcher is ported bug-for-bug from the Python one, down to
+its quirks (`gnvim` matches, `gnview` does not, `mvim` does not);
+`tests/vimnames.tsv` pins it against a truth table generated from the Python
+function.
+
+**Binary name.** The manifest calls `scripts/bin/herdr-splits` with no
+extension on every platform. That is a requirement, not a style choice: herdr
+resolves a relative command against the plugin root and canonicalises it, and
+Windows then runs that exact path without appending `PATHEXT` variants — it runs
+an extensionless image, but not `<name>.exe` reached that way. On Windows the
+installer therefore writes both: the extensionless image herdr launches, plus
+`herdr-splits.exe` with the same bytes, because PowerShell and `cmd` refuse to
+execute an extensionless file. Use whichever your shell accepts; both are
+refreshed by the same `install` run.
+
+### Why Rust instead of the Python scripts
+
+Each keypress re-executed `python -S scripts/herdr-nav.py`, so the dominant cost
+was interpreter start-up. Measured on Windows 11 (x86_64, Python 3.13, 50
+interleaved runs per variant, same stubbed transport — no server, so the numbers
+are the process cost the plugin owns):
+
+| variant | min | P25 | median | P90 |
+| --- | --- | --- | --- | --- |
+| `python -S scripts/herdr-nav.py` (what the manifest used to run) | 98.2 | 103.3 | 109.4 | 137.0 |
+| same script, slimmed (no `json`/`re`/`pathlib` imports) | 41.9 | 46.1 | 47.3 | 55.9 |
+| **Rust helper** | **6.1** | **7.0** | **9.0** | **10.9** |
+
+A bare `python -S` on an empty file costs ~55 ms on this machine, so the Rust
+helper removes the interpreter start-up entirely; what is left is process
+creation (~6 ms) plus a sub-millisecond RPC roundtrip. Reproduce with
+`python bench/ab.py --scripts <dir> --bin scripts/bin/herdr-splits`.
 
 ### Float and embedded-float classification
 
@@ -556,7 +680,8 @@ still provides convergence on startup:
 
 **Option B — manual:** after an update, re-run
 `herdr plugin install lmilojevicc/herdr-splits.nvim` to refresh the
-Herdr-side scripts.
+Herdr-side checkout. This also rebuilds the Rust helper, so an update that
+changes `rust/` needs it (or a local `make build` in `plugin link` mode).
 
 Release notes for each version live in [GitHub Releases](https://github.com/lmilojevicc/herdr-splits.nvim/releases).
 

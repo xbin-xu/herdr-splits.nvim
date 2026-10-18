@@ -27,6 +27,24 @@ function M.check()
     )
   end
 
+  -- The Herdr-side actions run scripts/bin/herdr-splits (built from rust/).
+  -- Without it the manifest's commands fail, which looks like "keys stopped
+  -- working" rather than a missing build.
+  local paths = require('herdr-splits.paths')
+  local helper = paths.root() .. '/scripts/bin/herdr-splits'
+  if vim.fn.executable(helper) == 1 then
+    local version = vim.fn.system({ helper, '--version' })
+    vim.health.ok(
+      string.format('Herdr-side helper present: %s', (vim.trim(version or ''))))
+  else
+    vim.health.error(
+      'Herdr-side helper missing at '
+        .. helper
+        .. ' — build it with `cargo build --release --manifest-path rust/Cargo.toml`'
+        .. ' then `cargo run --release --manifest-path rust/Cargo.toml -- install`'
+        .. ' (or reinstall the plugin so its build commands run)')
+  end
+
   -- One pane.get roundtrip proves the RPC transport and shows whether the
   -- registration token went out — the two failure modes of detection.
   if herdr.is_in_session() then
