@@ -19,6 +19,19 @@ T = MiniTest.new_set({
       ]])
     end,
     post_case = function()
+      -- Kill the pty jobs before the child dies: on Windows every terminal is a
+      -- ConPTY console, and a conhost whose parent disappears without the job
+      -- being stopped survives as an orphan (nobody reads its output pipe any
+      -- more, so it can even spin a core). Verified the hard way.
+      pcall(function()
+        child.lua([[
+          for _, b in ipairs(vim.api.nvim_list_bufs()) do
+            local job = vim.b[b].terminal_job_id
+            if job then pcall(vim.fn.jobstop, job) end
+          end
+          vim.cmd('silent! %bwipeout!')
+        ]])
+      end)
       child.stop()
     end,
   },

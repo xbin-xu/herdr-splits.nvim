@@ -199,7 +199,14 @@ Notes:
   behavior, no float/sidebar handling, and a count prefix stays inside Vim
   (it never crosses a pane boundary).
 - Plain Vim maps the chords in **both** normal and terminal mode (the terminal
-  `tnoremap` is the only way to leave a terminal split there). A chord pressed
+  `tnoremap` is the only way to leave a terminal split there).
+- Plain Vim can override two conf values for its own edge hand-off, because the
+  shared conf is one file per Herdr instance and only a Neovim `setup()` writes
+  it (`autoload/herdr_splits.vim` passes them to the helper as
+  `--nav-at-edge` / `--unzoom`): `let g:herdr_splits_nav_at_edge = 'stop'` and
+  `let g:herdr_splits_unzoom_on_nav = 0`. Leave them unset and the conf decides.
+  `g:herdr_splits_most_recently_focused` is forwarded too, so the pane-level
+  pick agrees with the in-window one. A chord pressed
   in Terminal-Job mode leaves you in Terminal-Job mode — the mapping has to
   drop out of it to run (a t-mode mapping cannot execute an Ex command
   otherwise), so the plugin switches the window back, and you see the terminal
@@ -384,14 +391,24 @@ things despite the shared name — `at_edge` is Neovim-side only and is not
 written to the conf.
 
 Because `nav_at_edge`, `unzoom_on_nav`, `most_recently_focused` and the key
-chords live in one generated conf **per Herdr instance**, they are global
-settings even though only a Neovim `setup()` writes them: the last Neovim to
-call `setup()` wins (a newly started Neovim, a `:Lazy reload`, an update), and
-they apply to every pane in that instance, including plain shells and plain
-Vim panes. Plain Vim has no channel to set them (it only reads the conf; its one
-per-editor override is `g:herdr_splits_most_recently_focused`), and hand-editing
-the conf does not survive the next `setup()` — use `HERDR_SPLITS_CONFIG` if you
-genuinely need two different instances.
+chords live in one generated conf **per Herdr instance**, the conf itself is
+global even though only a Neovim `setup()` writes it: the last Neovim to call
+`setup()` wins (a newly started Neovim, a `:Lazy reload`, an update), and the
+values apply to every pane in that instance, including plain shells.
+
+Two ways out of that, both of them "the caller decides":
+
+- **Plain Vim** passes its own values for the edge hand-off:
+  `g:herdr_splits_nav_at_edge`, `g:herdr_splits_unzoom_on_nav`,
+  `g:herdr_splits_most_recently_focused` become `--nav-at-edge=wrap|stop`,
+  `--unzoom=on|off` and `--most-recently-focused=on|off` on the helper call.
+- **Any caller** can do the same by hand; the flags override the conf for that
+  one invocation (`herdr-splits nav --help`).
+
+Neovim needs neither: it decides in-process from its own `setup()` values.
+
+Hand-editing the conf still does not survive the next `setup()` — use
+`HERDR_SPLITS_CONFIG` if you genuinely need two different instances.
 
 With `unzoom_on_nav=false`, navigation leaves the pane zoomed. Herdr keeps
 reporting the pre-zoom pane tiling and edge flags while zoomed, so MRU

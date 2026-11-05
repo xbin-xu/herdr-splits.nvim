@@ -48,6 +48,39 @@ pub struct Config {
     pub most_recently_focused: bool,
 }
 
+/// Caller-supplied overrides of the shared conf.
+///
+/// The conf is one file per Herdr instance (`$HERDR_PLUGIN_CONFIG_DIR`, else
+/// `~/.config/herdr/plugins/config/herdr-splits/herdr-splits.conf`), and only
+/// a Neovim `setup()` writes it — so it cannot represent two editors'
+/// preferences, and plain Vim has no channel at all. The editor that owns the
+/// edge hand-off therefore passes its own values on the command line; anything
+/// it does not pass keeps the conf value.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Overrides {
+    /// `unzoom_on_nav`
+    pub unzoom: Option<bool>,
+    /// `nav_at_edge`: `Some(true)` = wrap, `Some(false)` = stop
+    pub wrap_at_edge: Option<bool>,
+    /// `most_recently_focused`
+    pub most_recently_focused: Option<bool>,
+}
+
+impl Overrides {
+    /// Replace the conf-derived values this caller decided for itself.
+    pub fn apply_to(&self, config: &mut Config) {
+        if let Some(value) = self.unzoom {
+            config.unzoom = value;
+        }
+        if let Some(value) = self.wrap_at_edge {
+            config.wrap_at_edge = value;
+        }
+        if let Some(value) = self.most_recently_focused {
+            config.most_recently_focused = value;
+        }
+    }
+}
+
 impl Config {
     /// Defaults with the direction's built-in chord filled in.
     pub fn defaults(kind: Kind, direction: Direction) -> Config {
@@ -93,6 +126,39 @@ impl Config {
         if let Some(value) = conf_value(text, "most_recently_focused") {
             self.most_recently_focused = value.eq_ignore_ascii_case("true");
         }
+    }
+}
+
+#[cfg(test)]
+mod override_tests {
+    use super::*;
+
+    #[test]
+    fn overrides_replace_the_conf_values_they_set() {
+        let mut config = Config::defaults(Kind::Nav, Direction::Left);
+        config.wrap_at_edge = false;
+        config.unzoom = false;
+        config.most_recently_focused = false;
+
+        Overrides {
+            wrap_at_edge: Some(true),
+            unzoom: Some(true),
+            ..Overrides::default()
+        }
+        .apply_to(&mut config);
+
+        assert!(config.wrap_at_edge);
+        assert!(config.unzoom);
+        // Not passed by the caller: the conf value stands.
+        assert!(!config.most_recently_focused);
+    }
+
+    #[test]
+    fn empty_overrides_leave_the_conf_alone() {
+        let mut config = Config::defaults(Kind::Nav, Direction::Left);
+        config.wrap_at_edge = false;
+        Overrides::default().apply_to(&mut config);
+        assert!(!config.wrap_at_edge);
     }
 }
 

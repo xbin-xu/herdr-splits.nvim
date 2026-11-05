@@ -162,7 +162,7 @@ function! s:nav_command(direction) abort
     endif
   endif
   if !empty(bin)
-    return [bin, 'nav', '--pane-only', a:direction]
+    return extend([bin, 'nav', '--pane-only'], s:override_args()) + [a:direction]
   endif
 
   let script = get(g:, 'herdr_splits_script', '')
@@ -170,9 +170,45 @@ function! s:nav_command(direction) abort
     let script = s:root . '/scripts/herdr-nav.py'
   endif
   if filereadable(script)
-    return [get(g:, 'herdr_splits_python', 'python'), '-S', script, '--pane-only', a:direction]
+    return extend([get(g:, 'herdr_splits_python', 'python'), '-S', script, '--pane-only'],
+          \ s:override_args()) + [a:direction]
   endif
   return []
+endfunction
+
+" Per-editor overrides of the shared conf, sent on the command line.
+"
+" The conf is one file per Herdr instance and only a Neovim setup() writes it,
+" so a plain-Vim preference otherwise has no way in (and would be overwritten
+" by whichever Neovim started last). Unset = let the conf decide:
+"   let g:herdr_splits_nav_at_edge = 'stop'   " 'wrap' | 'stop'
+"   let g:herdr_splits_unzoom_on_nav = 0      " 1 | 0
+" g:herdr_splits_most_recently_focused is honoured too, so the pane-level pick
+" agrees with the in-window one.
+function! s:override_args() abort
+  let l:args = []
+
+  let l:edge = get(g:, 'herdr_splits_nav_at_edge', '')
+  if !empty(l:edge)
+    if l:edge ==# 'wrap' || l:edge ==# 'stop'
+      call add(l:args, '--nav-at-edge=' . l:edge)
+    else
+      call s:warn_override('g:herdr_splits_nav_at_edge must be ''wrap'' or ''stop'' '
+            \ . '(got ' . string(l:edge) . '); ignoring it')
+    endif
+  endif
+
+  let l:unzoom = get(g:, 'herdr_splits_unzoom_on_nav', -1)
+  if type(l:unzoom) == v:t_number && l:unzoom != -1
+    call add(l:args, '--unzoom=' . (l:unzoom ? 'on' : 'off'))
+  endif
+
+  if exists('g:herdr_splits_most_recently_focused')
+    call add(l:args, '--most-recently-focused='
+          \ . (g:herdr_splits_most_recently_focused ? 'on' : 'off'))
+  endif
+
+  return l:args
 endfunction
 
 " Edge hand-off. Runs when wincmd could not move (Vim is at its edge) and
@@ -182,6 +218,16 @@ endfunction
 " output / wrong exit codes — hence job_start()).
 " Failures — no helper found, interpreter missing, non-zero exit — warn once
 " via echom, then stay silent; a clean run re-arms the warning.
+" One-shot: a bad g: value is static, so say it once instead of per keypress.
+let s:override_warn_armed = 1
+
+function! s:warn_override(msg) abort
+  if s:override_warn_armed
+    let s:override_warn_armed = 0
+    echom 'herdr-splits: ' . a:msg
+  endif
+endfunction
+
 function! s:warn_handoff(msg) abort
   if s:handoff_warn_armed
     let s:handoff_warn_armed = 0

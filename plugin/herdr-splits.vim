@@ -34,6 +34,11 @@ let g:herdr_splits_script = get(g:, 'herdr_splits_script', '')
 "   autocmd TerminalOpen * tnoremap <buffer> <C-h> <C-h>
 let g:herdr_splits_terminal_nav = get(g:, 'herdr_splits_terminal_nav', 1)
 
+" Optional overrides of the shared conf for this editor's edge hand-off (see
+" s:override_args() in autoload/herdr_splits.vim). Unset = the conf decides:
+"   let g:herdr_splits_nav_at_edge = 'stop'   " 'wrap' | 'stop'
+"   let g:herdr_splits_unzoom_on_nav = 0      " 1 | 0
+
 " Advertise this plugin in the terminal title. nvim registers a TTL'd pane
 " token over RPC; plain Vim has no RPC transport for one, and on Windows
 " pane.process_info only sees the pane shell (the MSYS spawn layer hides

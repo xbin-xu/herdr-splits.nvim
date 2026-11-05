@@ -72,18 +72,12 @@ pub fn run(
     direction: Direction,
     pane_only: bool,
 ) -> Result<(), RpcError> {
-    // --pane-only (Neovim/Vim crossing out at its edge): pane-level selection
-    // only — never forward chords into panes, or the call would loop back into
-    // the editor.
-    if pane_only {
-        if try_mru(panes, config, config_path, direction, pane_id)? {
-            return Ok(());
-        }
-        return panes.focus_direction(pane_id, direction.as_str());
-    }
-
     // Editor pane: forward the chord; the editor plugin owns movement + unzoom.
-    if is_vim_pane(panes, pane_id)? {
+    // --pane-only (plain Vim crossing out at its own edge) skips *only* this
+    // step — forwarding into the pane would loop back into Vim — and then uses
+    // the plain-pane decision below, so unzoom, `nav_at_edge` and
+    // `most_recently_focused` apply to a Vim hand-off exactly as they do here.
+    if !pane_only && is_vim_pane(panes, pane_id)? {
         return panes.send_keys(pane_id, &[config.key.as_str()]);
     }
 
@@ -155,6 +149,7 @@ pub fn load_config(direction: Direction) -> (Config, std::path::PathBuf) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Overrides;
     use crate::rpc::ReplayClient;
     use std::path::PathBuf;
 
@@ -304,10 +299,19 @@ mod tests {
         );
     }
 
+    /// `--pane-only` skips forwarding but otherwise behaves like a plain pane:
+    /// detection is not even consulted, and the edge/unzoom decision runs.
     #[test]
     fn pane_only_never_forwards_a_chord() {
-        let fixture = r#"{"method":"pane.focus_direction","response":{"result":{}}}"#;
-        let mut client = replay(fixture);
+        let fixture = [
+            edges_response(false, &[("A", 0, 40), ("B", 40, 40)]),
+            r#"{"method":"pane.focus_direction","response":{"result":{}}}"#.to_string(),
+        ]
+        .join(
+            "
+",
+        );
+        let mut client = replay(&fixture);
         run(
             &mut Panes::new(&mut client),
             &nav_config(),
@@ -317,11 +321,93 @@ mod tests {
             true,
         )
         .unwrap();
-        assert_eq!(methods(&client), vec!["pane.focus_direction"]);
+        assert_eq!(methods(&client), vec!["pane.edges", "pane.focus_direction"]);
         assert_eq!(
-            client.calls()[0].1.to_json(),
+            client.calls()[1].1.to_json(),
             r#"{"pane_id":"A","direction":"right"}"#
         );
+    }
+
+    /// Plain Vim at the outermost edge used to do nothing: the pane-only path
+    /// never consulted `nav_at_edge`. Wrap now applies, as it does for Neovim.
+    #[test]
+    fn pane_only_wraps_at_the_edge() {
+        let fixture = [
+            edges_response(false, &[("A", 0, 40), ("B", 40, 40)]),
+            r#"{"method":"pane.focus_direction","response":{"result":{}}}"#.to_string(),
+        ]
+        .join(
+            "
+",
+        );
+        let mut client = replay(&fixture);
+        run(
+            &mut Panes::new(&mut client),
+            &nav_config(),
+            Path::new("conf"),
+            "A",
+            Direction::Left,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            client.calls()[1].1.to_json(),
+            r#"{"pane_id":"A","direction":"right"}"#
+        );
+    }
+
+    /// ... and the caller can override it per hand-off (`--nav-at-edge=stop`),
+    /// which is how a plain-Vim user gets a choice the shared conf cannot hold.
+    #[test]
+    fn pane_only_stop_override_halts_at_the_edge() {
+        let fixture = edges_response(false, &[("A", 0, 40), ("B", 40, 40)]);
+        let mut client = replay(&fixture);
+        let mut config = nav_config();
+        Overrides {
+            wrap_at_edge: Some(false),
+            ..Overrides::default()
+        }
+        .apply_to(&mut config);
+        run(
+            &mut Panes::new(&mut client),
+            &config,
+            Path::new("conf"),
+            "A",
+            Direction::Left,
+            true,
+        )
+        .unwrap();
+        assert_eq!(methods(&client), vec!["pane.edges"]);
+    }
+
+    /// `--unzoom=off` reaches the pane-only path too.
+    #[test]
+    fn pane_only_honours_the_unzoom_override() {
+        let fixture = [
+            edges_response(true, &[("A", 0, 40), ("B", 40, 40)]),
+            r#"{"method":"pane.focus_direction","response":{"result":{}}}"#.to_string(),
+        ]
+        .join(
+            "
+",
+        );
+        let mut client = replay(&fixture);
+        let mut config = nav_config();
+        Overrides {
+            unzoom: Some(false),
+            ..Overrides::default()
+        }
+        .apply_to(&mut config);
+        run(
+            &mut Panes::new(&mut client),
+            &config,
+            Path::new("conf"),
+            "A",
+            Direction::Right,
+            true,
+        )
+        .unwrap();
+        assert_eq!(methods(&client), vec!["pane.edges", "pane.focus_direction"]);
     }
 
     #[test]

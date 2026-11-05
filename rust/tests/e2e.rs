@@ -269,7 +269,10 @@ fn nav_pane_only_never_forwards_a_chord() {
     let dir = TempDir::new("nav-pane-only");
     let fixture = dir.write(
         "fixture.jsonl",
-        "{\"method\":\"pane.focus_direction\",\"response\":{\"result\":{}}}",
+        &format!(
+            "{EDGES_AT_LEFT}{}",
+            "{\"method\":\"pane.focus_direction\",\"response\":{\"result\":{}}}"
+        ),
     );
     let trace = dir.join("trace.log");
 
@@ -286,7 +289,35 @@ fn nav_pane_only_never_forwards_a_chord() {
         &[("HERDR_PANE_ID", "A")],
     );
     assert!(output.status.success(), "{}", stderr(&output));
-    assert_eq!(traced_methods(&trace), vec!["pane.focus_direction"]);
+    assert_eq!(
+        traced_methods(&trace),
+        vec!["pane.edges", "pane.focus_direction"]
+    );
+}
+
+/// The caller's own edge policy wins over the shared conf: this is how a plain
+/// Vim user gets `nav_at_edge=stop` without a Neovim setup() writing the conf.
+#[test]
+fn nav_pane_only_honours_the_nav_at_edge_override() {
+    let dir = TempDir::new("nav-pane-only-stop");
+    let fixture = dir.write("fixture.jsonl", EDGES_AT_LEFT);
+    let trace = dir.join("trace.log");
+
+    let output = run(
+        &[
+            "nav",
+            "--pane-only",
+            "--nav-at-edge=stop",
+            "left",
+            "--replay",
+            fixture.to_str().unwrap(),
+            "--trace",
+            trace.to_str().unwrap(),
+        ],
+        &[("HERDR_PANE_ID", "A")],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(traced_methods(&trace), vec!["pane.edges"]);
 }
 
 #[test]

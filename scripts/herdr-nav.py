@@ -45,16 +45,56 @@ def try_mru(sock_path: str, config_path: Path, cfg: dict, direction: str, pane_i
         return False
 
 
+def parse_overrides(args: list) -> tuple:
+    """Caller-decided values, which win over the shared conf.
+
+    The conf is one file per Herdr instance and only a Neovim setup() writes
+    it, so the editor that owns the edge hand-off passes its own policy:
+    --nav-at-edge=wrap|stop, --unzoom=on|off, --most-recently-focused=on|off.
+    """
+    overrides = {}
+    for arg in args:
+        for flag, key in (
+            ("--nav-at-edge=", "nav_at_edge"),
+            ("--unzoom=", "unzoom"),
+            ("--most-recently-focused=", "most_recently_focused"),
+        ):
+            if not arg.startswith(flag):
+                continue
+            value = arg[len(flag):]
+            if key == "nav_at_edge":
+                if value not in ("wrap", "stop"):
+                    return {}, f"{flag[:-1]} needs wrap|stop, got {value!r}"
+                overrides[key] = value
+            else:
+                truthy = {"on": True, "true": True, "1": True,
+                          "off": False, "false": False, "0": False}
+                if value not in truthy:
+                    return {}, f"{flag[:-1]} needs on|off, got {value!r}"
+                overrides[key] = truthy[value]
+    return overrides, ""
+
+
 def main() -> int:
-    args = sys.argv[1:]
-    pane_only = "--pane-only" in args
-    args = [a for a in args if a != "--pane-only"]
+    raw = sys.argv[1:]
+    pane_only = "--pane-only" in raw
+    overrides, error = parse_overrides(raw)
+    if error:
+        print(error, file=sys.stderr)
+        return 2
+    args = [a for a in raw if a != "--pane-only" and not a.startswith("--nav-at-edge=")
+            and not a.startswith("--unzoom=") and not a.startswith("--most-recently-focused=")]
     if len(args) != 1 or args[0] not in DIRECTION_OPPOSITE:
-        print("usage: herdr-nav.py [--pane-only] <left|down|up|right>", file=sys.stderr)
+        print(
+            "usage: herdr-nav.py [--pane-only] [--nav-at-edge=wrap|stop] "
+            "[--unzoom=on|off] [--most-recently-focused=on|off] <left|down|up|right>",
+            file=sys.stderr,
+        )
         return 2
     direction = args[0]
     opposite = DIRECTION_OPPOSITE[direction]
     cfg = read_config("nav", direction)
+    cfg.update(overrides)
     config_path = resolve_config_path()
     sock_path = discover_socket_path()
 
@@ -67,18 +107,13 @@ def main() -> int:
         print("herdr-nav: could not determine current pane", file=sys.stderr)
         return 1
 
-    # --pane-only (Neovim crossing out at its edge): pane-level selection
-    # only — never forward chords into panes, or the call would loop back
-    # into Neovim. Kept for plugin versions that predate the Lua RPC client
+    # --pane-only (plain Vim crossing out at its own edge) skips *only* the
+    # chord forwarding below — forwarding into the pane would loop back into
+    # Vim — and then runs the same pane-level decision: unzoom, nav_at_edge
+    # and most_recently_focused apply to a Vim hand-off exactly as they do to
+    # a plain pane. Kept for plugin versions that predate the Lua RPC client
     # (current Neovim-side code performs this selection in-process).
-    if pane_only:
-        if try_mru(sock_path, config_path, cfg, direction, pane_id):
-            return 0
-        rpc_call(sock_path, "pane.focus_direction", {"pane_id": pane_id, "direction": direction})
-        return 0
-
-    # Vim pane: forward the chord; the Neovim plugin owns movement + unzoom.
-    if is_vim_pane(sock_path, pane_id):
+    if not pane_only and is_vim_pane(sock_path, pane_id):
         rpc_call(sock_path, "pane.send_keys", {"pane_id": pane_id, "keys": [cfg["key"]]})
         return 0
 

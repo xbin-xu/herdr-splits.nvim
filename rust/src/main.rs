@@ -90,8 +90,12 @@ fn run(options: &Options) -> Result<ExitCode, Failure> {
         Command::Nav {
             pane_only,
             direction,
+            overrides,
         } => with_client(options, |client| {
-            let (config, config_path) = nav::load_config(*direction);
+            let (mut config, config_path) = nav::load_config(*direction);
+            // The caller (the editor doing the edge hand-off) wins over the
+            // shared conf, which cannot hold two editors' preferences.
+            overrides.apply_to(&mut config);
             let mut panes = Panes::new(client);
             let Some(current) = nav::current_pane(&mut panes, ctx::env_pane_id())
                 .map_err(|err| connect_failure("nav", &err))?

@@ -4,12 +4,18 @@
 //! argv, so the parser only has to be exact, not clever:
 //!
 //! ```text
-//! herdr-splits nav [--pane-only] <left|down|up|right>
+//! herdr-splits nav [--pane-only] [--nav-at-edge=wrap|stop] [--unzoom=on|off]
+//!                  [--most-recently-focused=on|off] <left|down|up|right>
 //! herdr-splits resize <left|down|up|right> [amount]
 //! herdr-splits install [--root <plugin-root>]
 //! herdr-splits doctor
 //! herdr-splits --version
 //! ```
+//!
+//! The three `nav` overrides are the caller deciding for itself: the shared
+//! conf is one file per Herdr instance and only a Neovim `setup()` writes it,
+//! so an editor that hands off at its edge must be able to say "stop" / "no
+//! unzoom" without touching the conf (plain Vim has no writer at all).
 //!
 //! Two options exist for tests and diagnostics rather than for users:
 //! `--replay <file>` answers RPC calls from a fixture instead of the socket,
@@ -17,6 +23,7 @@
 
 use std::path::PathBuf;
 
+use crate::config::Overrides;
 use crate::geometry::Direction;
 
 /// Default resize step, matching `config.default_amount` on the Neovim side.
@@ -27,6 +34,7 @@ pub enum Command {
     Nav {
         pane_only: bool,
         direction: Direction,
+        overrides: Overrides,
     },
     Resize {
         direction: Direction,
@@ -65,6 +73,12 @@ impl UsageError {
 
 const USAGE: &str = "usage: herdr-splits <nav|resize|install|doctor> ...";
 
+const NAV_USAGE: &str = concat!(
+    "usage: herdr-splits nav [--pane-only] ",
+    "[--nav-at-edge=wrap|stop] [--unzoom=on|off] ",
+    "[--most-recently-focused=on|off] <left|down|up|right>"
+);
+
 /// Full help text (`--help`), kept short: the README owns the long version.
 pub fn help_text() -> String {
     format!(
@@ -75,7 +89,11 @@ USAGE:
 {USAGE}
 
 COMMANDS:
-  nav [--pane-only] <left|down|up|right>   navigate panes/editors
+  nav [--pane-only] <dir>                  navigate panes/editors
+                                           overrides for the caller's own
+                                           hand-off: --nav-at-edge=wrap|stop,
+                                           --unzoom=on|off,
+                                           --most-recently-focused=on|off
   resize <left|down|up|right> [amount]     resize the focused pane (default {DEFAULT_AMOUNT})
   install [--root <plugin-root>]           copy this binary into <root>/scripts/bin
   doctor                                   print resolved paths and probe the server
@@ -132,6 +150,16 @@ pub fn parse(args: &[String]) -> Result<Options, UsageError> {
                 positional.push(arg.to_string());
                 index += 1;
             }
+            // `nav` overrides: the subcommand parses the value, so keep them
+            // positional here (like `--pane-only` above).
+            other
+                if other.starts_with("--nav-at-edge=")
+                    || other.starts_with("--unzoom=")
+                    || other.starts_with("--most-recently-focused=") =>
+            {
+                positional.push(arg.to_string());
+                index += 1;
+            }
             // `--root` belongs to the `install` subcommand: keep it (and its
             // value) positional so the subcommand parses it, and leave the
             // unknown-flag check to the subcommand's own loop.
@@ -157,30 +185,41 @@ pub fn parse(args: &[String]) -> Result<Options, UsageError> {
         "nav" => {
             let mut pane_only = false;
             let mut direction = None;
+            let mut overrides = Overrides::default();
             for arg in &positional[1..] {
                 if arg == "--pane-only" {
                     pane_only = true;
+                } else if let Some(value) = arg.strip_prefix("--nav-at-edge=") {
+                    overrides.wrap_at_edge = Some(match value {
+                        "wrap" => true,
+                        "stop" => false,
+                        other => {
+                            return Err(UsageError::new(format!(
+                                "--nav-at-edge needs wrap|stop, got {other:?}"
+                            )))
+                        }
+                    });
+                } else if let Some(value) = arg.strip_prefix("--unzoom=") {
+                    overrides.unzoom = Some(parse_switch("--unzoom", value)?);
+                } else if let Some(value) = arg.strip_prefix("--most-recently-focused=") {
+                    overrides.most_recently_focused =
+                        Some(parse_switch("--most-recently-focused", value)?);
                 } else if direction.is_none() {
                     direction = Direction::parse(arg);
                     if direction.is_none() {
-                        return Err(UsageError::new(
-                            "usage: herdr-splits nav [--pane-only] <left|down|up|right>",
-                        ));
+                        return Err(UsageError::new(NAV_USAGE));
                     }
                 } else {
-                    return Err(UsageError::new(
-                        "usage: herdr-splits nav [--pane-only] <left|down|up|right>",
-                    ));
+                    return Err(UsageError::new(NAV_USAGE));
                 }
             }
             let Some(direction) = direction else {
-                return Err(UsageError::new(
-                    "usage: herdr-splits nav [--pane-only] <left|down|up|right>",
-                ));
+                return Err(UsageError::new(NAV_USAGE));
             };
             Command::Nav {
                 pane_only,
                 direction,
+                overrides,
             }
         }
         "resize" => {
@@ -245,6 +284,17 @@ pub fn parse(args: &[String]) -> Result<Options, UsageError> {
     })
 }
 
+/// `on`/`off` (also `true`/`false`, `1`/`0`) for a boolean override flag.
+fn parse_switch(flag: &str, text: &str) -> Result<bool, UsageError> {
+    match text {
+        "on" | "true" | "1" => Ok(true),
+        "off" | "false" | "0" => Ok(false),
+        other => Err(UsageError::new(format!(
+            "{flag} needs on|off, got {other:?}"
+        ))),
+    }
+}
+
 /// `float()` semantics for the resize argument, minus the traceback: Python
 /// accepted trailing spaces and exponents, which `str::parse` already does
 /// after trimming.
@@ -291,7 +341,8 @@ mod tests {
                 parse_ok(&["nav", text]).command,
                 Command::Nav {
                     pane_only: false,
-                    direction
+                    direction,
+                    overrides: Overrides::default()
                 }
             );
         }
@@ -307,10 +358,51 @@ mod tests {
                 parse_ok(values).command,
                 Command::Nav {
                     pane_only: true,
-                    direction: Direction::Left
+                    direction: Direction::Left,
+                    overrides: Overrides::default()
                 }
             );
         }
+    }
+
+    #[test]
+    fn nav_overrides_are_parsed() {
+        let options = parse_ok(&[
+            "nav",
+            "--pane-only",
+            "--nav-at-edge=stop",
+            "--unzoom=off",
+            "--most-recently-focused=on",
+            "left",
+        ]);
+        assert_eq!(
+            options.command,
+            Command::Nav {
+                pane_only: true,
+                direction: Direction::Left,
+                overrides: Overrides {
+                    wrap_at_edge: Some(false),
+                    unzoom: Some(false),
+                    most_recently_focused: Some(true),
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn nav_overrides_reject_bad_values() {
+        assert!(contains(
+            &parse_err(&["nav", "--nav-at-edge=maybe", "left"]),
+            "--nav-at-edge"
+        ));
+        assert!(contains(
+            &parse_err(&["nav", "--unzoom=sometimes", "left"]),
+            "--unzoom"
+        ));
+        assert!(contains(
+            &parse_err(&["nav", "--most-recently-focused=nope", "left"]),
+            "--most-recently-focused"
+        ));
     }
 
     #[test]
@@ -441,7 +533,8 @@ mod tests {
             options.command,
             Command::Nav {
                 pane_only: false,
-                direction: Direction::Left
+                direction: Direction::Left,
+                overrides: Overrides::default()
             }
         );
     }
