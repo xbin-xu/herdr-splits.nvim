@@ -110,6 +110,10 @@ herdr plugin link /path/to/herdr-splits
       resize_keys = { left = '<M-h>', down = '<M-j>', up = '<M-k>', right = '<M-l>' },
       unzoom_on_nav = true,   -- auto-unzoom when navigating away from a zoomed pane
       nav_at_edge    = 'wrap', -- 'wrap' | 'stop' — Herdr pane-boundary wrap (distinct from at_edge)
+      -- Opt-in: re-map the nav chords in terminal buffers so the edge hands
+      -- off to Herdr instead of stopping inside Neovim (see "Terminal-mode
+      -- navigation" below). `true` = every pty terminal.
+      terminal_nav = { filetypes = { 'snacks_terminal' } },
     })
   end,
   keys = {
@@ -194,6 +198,76 @@ Notes:
 - Neovim-only parity gaps in plain Vim: no local `at_edge=wrap`/`split`
   behavior, no float/sidebar handling, and a count prefix stays inside Vim
   (it never crosses a pane boundary).
+- Plain Vim maps the chords in **both** normal and terminal mode (the terminal
+  `tnoremap` is the only way to leave a terminal split there). A chord pressed
+  in Terminal-Job mode leaves you in Terminal-Job mode — the mapping has to
+  drop out of it to run (a t-mode mapping cannot execute an Ex command
+  otherwise), so the plugin switches the window back, and you see the terminal
+  rather than line numbers over the shell output. Entering a terminal window from
+  elsewhere is left to Vim: it keeps such a window in Terminal-Normal mode until
+  `i`, and the plugin does not override that. `<C-\><C-n>` itself still gives you
+  the scrollback (Terminal-Normal), which is what it is for. Neovim's
+  equivalent is opt-in and allow-listed (`terminal_nav`, see 2c) because there
+  it only *replaces* interception a distribution already does. Opt out of it
+  in Vim with `let g:herdr_splits_terminal_nav = 0` (install-time: normal mode
+  keeps working, no t-mode map is defined). To keep the chords for a single
+  terminal buffer or a terminal plugin, win the mapping yourself — buffer-local
+  beats global, and the plugin then never shadows it:
+
+  ```vim
+  autocmd TerminalOpen * tnoremap <buffer> <C-h> <C-h>
+  ```
+
+### 2c. Terminal-mode navigation (Neovim)
+
+Plain Vim has always crossed panes from inside a terminal (`tnoremap` in
+`plugin/herdr-splits.vim`). Neovim needs the same thing **buffer-locally**, and
+that is what `terminal_nav` does:
+
+```lua
+require('herdr-splits').setup({
+  -- true = every pty terminal; a table scopes it
+  terminal_nav = { filetypes = { 'snacks_terminal' } },
+})
+```
+
+Why it cannot be a plain global mapping: editor distributions and terminal
+plugins map the chords **in the terminal buffer**, and Neovim resolves
+buffer-local before global. LazyVim/snacks, for example, install
+
+```lua
+nav_j = { '<C-j>', function() vim.schedule(function() vim.cmd.wincmd('j') end) end,
+          expr = true, mode = 't' }
+```
+
+in `lua/lazyvim/plugins/util.lua`. `wincmd` only moves Neovim windows: at the
+Neovim edge it fails silently, so the chord never reaches Herdr and the cursor
+is stuck in the terminal split. The plugin therefore maps one tick after
+`TermOpen` (which fires after such a plugin has mapped its window) and wins.
+
+Behavior:
+
+- **Tiled terminals** (a terminal split): the chord routes through
+  `move_cursor_*`, so it moves between Neovim windows, crosses into the sibling
+  Herdr pane at the edge, and `at_edge`/`nav_at_edge` decide what happens when
+  both edges are reached (default `wrap`).
+- **Floating terminals** keep the chord: it belongs to the program inside
+  (htop, fzf, ssh, ...). The mapping returns the key unremapped, mirroring
+  LazyVim's own `is_floating` branch.
+- The maps follow `nav_keys`, so a remap (e.g. `<M-Left>`) applies in terminal
+  mode too.
+- Scope it: `terminal_nav = true` covers every `buftype=terminal` buffer
+  (`:terminal`, toggleterm, dap-repl-style ptys, ...). If a terminal runs
+  something that wants the chords itself (a nested Vim, htop), either narrow it
+  with `filetypes = {...}` (allow-list) or exclude it with
+  `skip_filetypes = {...}`. A plain `:terminal` has an empty `filetype`, so
+  prefer the allow-list when you only want your terminal plugin covered.
+- Buffers that are not `buftype=terminal` — including `dap-repl` (a `prompt`
+  buffer) — are never touched.
+- Session restore rebuilds terminal buffers without firing `TermOpen`, so
+  `setup()` also maps the terminal buffers that already exist.
+
+Runtime re-apply after changing the config: `require('herdr-splits').setup_terminal_nav()`.
 
 ### 3. Add keybinds to Herdr config
 
@@ -309,6 +383,16 @@ and `nav_at_edge` (Herdr pane-boundary wrap: `wrap`/`stop`) are two different
 things despite the shared name — `at_edge` is Neovim-side only and is not
 written to the conf.
 
+Because `nav_at_edge`, `unzoom_on_nav`, `most_recently_focused` and the key
+chords live in one generated conf **per Herdr instance**, they are global
+settings even though only a Neovim `setup()` writes them: the last Neovim to
+call `setup()` wins (a newly started Neovim, a `:Lazy reload`, an update), and
+they apply to every pane in that instance, including plain shells and plain
+Vim panes. Plain Vim has no channel to set them (it only reads the conf; its one
+per-editor override is `g:herdr_splits_most_recently_focused`), and hand-editing
+the conf does not survive the next `setup()` — use `HERDR_SPLITS_CONFIG` if you
+genuinely need two different instances.
+
 With `unzoom_on_nav=false`, navigation leaves the pane zoomed. Herdr keeps
 reporting the pre-zoom pane tiling and edge flags while zoomed, so MRU
 selection and edge wrapping work as usual; focus moves and the zoom follows
@@ -416,6 +500,9 @@ Each trace line is `method<TAB>params-json<TAB>ok|error`.
 
 ```lua
 require('herdr-splits').setup(opts)
+
+-- (Re)install terminal-mode navigation after changing `terminal_nav` at runtime
+require('herdr-splits').setup_terminal_nav()
 
 -- Resize (amount defaults to config.default_amount, multiplied by count prefix)
 require('herdr-splits').resize_left(amount)

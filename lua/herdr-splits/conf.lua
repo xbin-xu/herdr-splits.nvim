@@ -102,6 +102,42 @@ function M.to_herdr(nvim_key)
   return table.concat(mods, '+')
 end
 
+-- Reverse tables for to_nvim. `enter` normalises to <CR> (Neovim's canonical
+-- spelling; `<Return>`/`<Enter>` in the input both landed on `enter`).
+local MOD_REV = { ctrl = 'C', alt = 'M', shift = 'S', cmd = 'D' }
+local SPECIAL_REV = {
+  left = 'Left', right = 'Right', up = 'Up', down = 'Down',
+  enter = 'CR', tab = 'Tab', esc = 'Esc', space = 'Space',
+  backspace = 'BS', delete = 'Del', home = 'Home', ['end'] = 'End',
+  pageup = 'PageUp', pagedown = 'PageDown',
+}
+-- Canonical modifier order in Neovim notation.
+local MOD_ORDER = { 'C', 'M', 'S', 'D' }
+
+---Translate Herdr chord notation back into Neovim key notation (the inverse of
+---to_herdr), so Neovim-side mappings can follow the resolved `nav_keys`.
+---`enter` becomes `<CR>` — Neovim's canonical spelling.
+---@param chord string|nil e.g. `ctrl+h`, `alt+left`
+---@return string|nil e.g. `<C-h>`, `<M-Left>`
+function M.to_nvim(chord)
+  if type(chord) ~= 'string' or chord == '' then return nil end
+  local parts = vim.split(chord, '+', { plain = true })
+  local key = table.remove(parts)
+  if not key or key == '' then return nil end
+  local name = SPECIAL_REV[key] or key
+  local seen = {}
+  for _, mod in ipairs(parts) do
+    local m = MOD_REV[mod]
+    if m then seen[m] = true end
+  end
+  local mods = {}
+  for _, m in ipairs(MOD_ORDER) do
+    if seen[m] then mods[#mods + 1] = m end
+  end
+  if #mods == 0 then return name end
+  return '<' .. table.concat(mods, '-') .. '-' .. name .. '>'
+end
+
 ---Parse the shared config file for the managed keys only. When the file
 ---carries the generated MARKER it is the plugin's own output and is NOT read
 ---back (setup() is authoritative — removing an opt reverts to default). When

@@ -25,6 +25,14 @@ let g:herdr_splits_python = get(g:, 'herdr_splits_python', 'python')
 " Optional explicit path to herdr-nav.py; empty uses the copy shipped in this
 " plugin's own checkout (scripts/herdr-nav.py).
 let g:herdr_splits_script = get(g:, 'herdr_splits_script', '')
+" Terminal-mode navigation switch (default on). Neovim scopes its equivalent
+" (`terminal_nav`) with an allow-list because there it only *replaces*
+" interception a distribution already does; here the tnoremap below is the only
+" way to leave a terminal split, so it stays on and is install-time opt-out.
+" To keep the chords for one terminal buffer (or a terminal plugin), win the
+" mapping yourself — buffer-local beats global:
+"   autocmd TerminalOpen * tnoremap <buffer> <C-h> <C-h>
+let g:herdr_splits_terminal_nav = get(g:, 'herdr_splits_terminal_nav', 1)
 
 " Advertise this plugin in the terminal title. nvim registers a TTL'd pane
 " token over RPC; plain Vim has no RPC transport for one, and on Windows
@@ -50,8 +58,10 @@ if $HERDR_ENV ==# '1'
   nnoremap <silent> <C-j> :<C-U>call herdr_splits#nav('j')<CR>
   nnoremap <silent> <C-k> :<C-U>call herdr_splits#nav('k')<CR>
   nnoremap <silent> <C-l> :<C-U>call herdr_splits#nav('l')<CR>
-  tnoremap <silent> <C-h> <C-\><C-n>:<C-U>call herdr_splits#nav('h')<CR>
-  tnoremap <silent> <C-j> <C-\><C-n>:<C-U>call herdr_splits#nav('j')<CR>
-  tnoremap <silent> <C-k> <C-\><C-n>:<C-U>call herdr_splits#nav('k')<CR>
-  tnoremap <silent> <C-l> <C-\><C-n>:<C-U>call herdr_splits#nav('l')<CR>
+  if g:herdr_splits_terminal_nav
+    tnoremap <silent> <C-h> <C-\><C-n>:<C-U>call herdr_splits#nav('h', 1)<CR>
+    tnoremap <silent> <C-j> <C-\><C-n>:<C-U>call herdr_splits#nav('j', 1)<CR>
+    tnoremap <silent> <C-k> <C-\><C-n>:<C-U>call herdr_splits#nav('k', 1)<CR>
+    tnoremap <silent> <C-l> <C-\><C-n>:<C-U>call herdr_splits#nav('l', 1)<CR>
+  endif
 endif

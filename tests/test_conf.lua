@@ -54,6 +54,26 @@ T['to_herdr translates key notation'] = function()
   expect.equality(translate('<C>'), vim.NIL)
 end
 
+T['to_nvim inverts to_herdr (canonical spellings)'] = function()
+  local roundtrip = function(value)
+    return child.lua_func(function(key)
+      local conf = require('herdr-splits.conf')
+      return conf.to_nvim(conf.to_herdr(key))
+    end, value)
+  end
+
+  expect.equality(roundtrip('<C-h>'), '<C-h>')
+  expect.equality(roundtrip('<M-l>'), '<M-l>')
+  expect.equality(roundtrip('<C-M-Left>'), '<C-M-Left>')
+  expect.equality(roundtrip('<S-Space>'), '<S-Space>')
+  expect.equality(roundtrip('h'), 'h')
+  -- `enter` is the normalised spelling (both <Return> and <Enter> map to it).
+  expect.equality(roundtrip('<A-Return>'), '<M-CR>')
+  expect.equality(child.lua_func(function()
+    return require('herdr-splits.conf').to_nvim(nil)
+  end), vim.NIL)
+end
+
 T['read_managed handles a missing file'] = function()
   local result = child.lua_func(function()
     local values, adopted = require('herdr-splits.conf').read_managed()

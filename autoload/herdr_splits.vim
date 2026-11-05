@@ -223,7 +223,30 @@ endfunction
 " With most_recently_focused (shared conf or g: override) a single move
 " picks among the adjacent windows by focus recency, like the Neovim side;
 " otherwise — and for counts — it is a plain wincmd move.
-function! herdr_splits#nav(key) abort
+"
+" {from_term} is set by the terminal-mode mapping (see plugin/herdr-splits.vim).
+" That mapping has to start with <C-\><C-n>, because a Terminal-Job mapping
+" cannot run an Ex command otherwise — so it always leaves Terminal-Job mode
+" before we get here, and Vim then draws the shell scrollback like a normal
+" buffer: line numbers, cursor parked in the output. Nothing was wrong with the
+" old `<C-w>h` tnoremap, which never left Job mode, so restore that contract:
+" when the chord came from Terminal-Job mode and the cursor ends up in a
+" terminal window, put it back into Terminal-Job mode. Navigating into a text
+" window (or a deliberate Terminal-Normal <C-hjkl>) is untouched.
+function! herdr_splits#nav(key, ...) abort
+  let l:from_term = a:0 > 0 && a:1
+  call s:nav(a:key)
+  " Only undo the mode change our own mapping forced. Arriving in a terminal
+  " window from anywhere else is Vim's business: Vim keeps a terminal window in
+  " Terminal-Normal mode until 'i', and that is left untouched (as is a
+  " deliberate Terminal-Normal <C-hjkl>).
+  " `:startinsert` is ineffective here (:h Terminal-Normal); the key is not.
+  if l:from_term && &buftype ==# 'terminal' && mode() !=# 't'
+    normal! i
+  endif
+endfunction
+
+function! s:nav(key) abort
   " Window commands are forbidden in the command-line window (E11).
   if getcmdwintype() !=# ''
     return

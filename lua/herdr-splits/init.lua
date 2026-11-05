@@ -12,6 +12,7 @@ local resize_mod = require('herdr-splits.resize')
 local win = require('herdr-splits.win')
 local sync = require('herdr-splits.sync')
 local register = require('herdr-splits.register')
+local terminal = require('herdr-splits.terminal')
 
 local M = {}
 
@@ -21,6 +22,13 @@ function M.setup(opts)
   config.setup(opts)
   pcall(sync.sync)
   pcall(register.register)
+  pcall(terminal.setup, config.terminal_nav)
+end
+
+---(Re)install terminal-mode navigation for the current `terminal_nav` value.
+---setup() already does this; call it after changing the config at runtime.
+function M.setup_terminal_nav()
+  pcall(terminal.setup, config.terminal_nav)
 end
 
 ---Sync the Herdr-managed checkout to match this lazy commit.

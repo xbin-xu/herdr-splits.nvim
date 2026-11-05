@@ -17,6 +17,12 @@
 ---@field unzoom_on_nav boolean If true, auto-unzoom when navigating away from a zoomed pane (default true)
 ---@field nav_at_edge 'wrap'|'stop' Herdr pane-boundary wrap behavior (distinct from at_edge, which is the Neovim window-edge behavior)
 ---@field most_recently_focused boolean tmux-style target choice at both levels — the most recently focused window/pane among the adjacent candidates, including at wrapped edges (managed: written to the conf so the Herdr-side scripts agree; default false)
+---@field terminal_nav false|true|HerdrSplitsTerminalNav Terminal-mode navigation: re-map the nav chords buffer-locally in pty terminal buffers so the edge hands off to Herdr (opt-in, default false). `true` = all terminals, a table scopes it.
+---@field nav_keys_nvim table<string,string> The resolved nav_keys in Neovim notation (derived, feeds terminal_nav's t-mode maps)
+
+---@class HerdrSplitsTerminalNav
+---@field filetypes string[]|nil Map only these terminal filetypes (omit = no filetype restriction)
+---@field skip_filetypes string[]|nil Never map these terminal filetypes
 
 -- Managed config defaults (Herdr notation). The single source of truth for
 -- the key set written to herdr-splits.conf; deep-copied into M below and into
@@ -65,6 +71,10 @@ local M = {
   unzoom_on_nav = managed_defaults.unzoom_on_nav,
   nav_at_edge = managed_defaults.nav_at_edge,
   most_recently_focused = managed_defaults.most_recently_focused,
+  -- Neovim-side t-mode maps (see terminal.lua). Derived from the resolved
+  -- nav_keys below so a remap reaches terminal mode too.
+  terminal_nav = false,
+  nav_keys_nvim = {},
 }
 
 local conf = require('herdr-splits.conf')
@@ -113,6 +123,13 @@ function M.setup(opts)
   M.nav_keys, M.resize_keys = resolved.nav_keys, resolved.resize_keys
   M.unzoom_on_nav, M.nav_at_edge = resolved.unzoom_on_nav, resolved.nav_at_edge
   M.most_recently_focused = resolved.most_recently_focused
+
+  -- Neovim-notation chords for the Neovim-side t-mode maps (terminal_nav),
+  -- derived from the resolved Herdr-notation keys above so both sides agree.
+  M.nav_keys_nvim = {}
+  for dir, chord in pairs(M.nav_keys) do
+    M.nav_keys_nvim[dir] = conf.to_nvim(chord)
+  end
 
   -- One-time migration notice: a headerless/legacy conf was adopted. Fires
   -- once — after this setup() the conf carries the marker, so later setups

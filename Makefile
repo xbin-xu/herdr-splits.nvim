@@ -18,8 +18,11 @@ test: deps
 		-u "$(ROOT)/scripts/minimal_init.lua" -c "lua MiniTest.run()"
 
 test-vim:
-	"$(VIM)" -u NONE -N --not-a-term -S "$(ROOT)/tests/vim/test_title.vim" </dev/null
-	@echo "Vim title tests passed"
+	@for t in "$(ROOT)"/tests/vim/test_*.vim; do \
+		echo "vim test: $${t##*/}"; \
+		"$(VIM)" -u NONE -N --not-a-term -S "$$t" </dev/null || exit 1; \
+	done
+	@echo "Vim tests passed"
 
 test-py:
 	"$(PYTHON)" -m unittest discover -s "$(ROOT)/tests" -p 'test_*.py'

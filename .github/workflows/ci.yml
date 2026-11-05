@@ -80,3 +80,27 @@ jobs:
           neovim: true
           version: ${{ matrix.neovim-version }}
       - run: make test
+
+  # The Vim side has no Lua harness: its tests drive a real Vim. Only the
+  # terminal-mode regression test opens ptys (harmless on Linux runners); it is
+  # opt-in because on Windows every pty is a ConPTY console and a hung run looks
+  # like a process storm.
+  vim:
+    name: Vim ${{ matrix.version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        version: [v9.1.0000, stable]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: rhysd/action-setup-vim@febef33995d6649302e9d88dda81e071b68f16a7 # v1.6.1
+        with:
+          vim: true
+          version: ${{ matrix.version }}
+      - run: make test-vim
+        env:
+          HERDR_SPLITS_TEST_TERM: '1'
