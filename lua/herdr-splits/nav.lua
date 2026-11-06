@@ -352,8 +352,32 @@ function M.move_cursor(direction, opts)
     return
   end
 
-  -- At both Neovim AND Herdr edges (no herdr pane to cross into).
-  -- Apply at_edge behavior. (Any needed unzoom already happened above.)
+  -- At both Neovim AND Herdr edges. Two independent policies meet here:
+  --
+  -- * `nav_at_edge` owns the *pane* boundary: with `wrap` the chord continues on
+  --   the opposite side of the layout — into the pane there, if there is one
+  --   (tmux's edge flip). `stop` keeps the editor to itself.
+  -- * `at_edge` owns the *editor* boundary: stop, wrap inside Neovim, split, or a
+  --   caller function.
+  --
+  -- The pane flip is decided first so the two can be combined (`at_edge=stop`
+  -- plus `nav_at_edge=wrap` = "cross into the pane on the opposite side, but
+  -- never wrap inside the editor"), but only for the two modes that describe
+  -- "there is nowhere left to go". `split` and a custom function are explicit
+  -- editor-level intents: they keep their behaviour and never cross a pane.
+  local pane_flip_applies = type(at_edge_behavior) ~= 'function'
+    and at_edge_behavior ~= 'split'
+  if
+    pane_flip_applies
+    and will_wrap
+    and count == 1
+    and herdr.nav_at_edge() ~= 'stop'
+    and herdr.current_pane_at_edge(win.reverse_direction[direction]) == false
+  then
+    cross_wrap_pane()
+    return
+  end
+
   if type(at_edge_behavior) == 'function' then
     at_edge_behavior({
       direction = direction,
@@ -369,16 +393,8 @@ function M.move_cursor(direction, opts)
     end
   else -- 'wrap' (default)
     if will_wrap and count == 1 then
-      -- Wrap to the opposite side. If a Herdr pane exists there AND nav_at_edge
-      -- allows wrap-across-boundary (the default), cross into it; otherwise
-      -- wrap within Neovim. nav_at_edge=stop keeps the wrap inside Neovim.
-      if herdr.nav_at_edge() ~= 'stop'
-          and herdr.current_pane_at_edge(win.reverse_direction[direction]) == false
-      then
-        cross_wrap_pane()
-      else
-        wrap_local()
-      end
+      -- The opposite-side pane, if any, was already handled above.
+      wrap_local()
     end
   end
 end

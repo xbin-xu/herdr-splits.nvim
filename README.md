@@ -478,15 +478,24 @@ unzoom_on_nav=false
 nav_at_edge=stop
 ```
 
-This single switch controls wrap-across-boundary on **both** sides:
+`nav_at_edge` is the **pane**-boundary rule and is independent of `at_edge`,
+which is the **editor**-window rule (see below). At a chord that reaches both at
+once — the usual case for a pane holding one editor:
 
-- **Plain Herdr panes:** `wrap` (the default) wraps to the opposite pane at an
-  edge; `stop` halts.
-- **Neovim edge wrap:** when Neovim's `at_edge='wrap'`, `wrap` lets the wrap
-  cross to the Herdr pane on the opposite side (e.g. `ctrl+l` from the last nvim
-  split lands on the pane); `stop` keeps the wrap within Neovim (e.g. `ctrl+l`
-  from the last split cycles to the first split instead of leaving Neovim).
-  `at_edge='stop'` halts regardless of `nav_at_edge`.
+- **Plain Herdr panes:** `wrap` (the default) continues on the opposite side of
+  the layout, into the pane there; `stop` halts.
+- **Neovim at its own edge:** with `nav_at_edge=wrap`, the chord still continues
+  into the pane on the opposite side of the layout (e.g. `ctrl+l` from the
+  rightmost nvim split lands on the pane to its left, `ctrl+k` from the topmost
+  split lands on a pane below). With `nav_at_edge=stop` that flip is suppressed.
+- Whatever the pane rule does *not* consume falls through to `at_edge`:
+  `stop` halts, `wrap` wraps inside Neovim (e.g. `ctrl+l` from the last split
+  cycles to the first split), `split` opens a new window, a function decides.
+
+So `at_edge='stop'` + `nav_at_edge='wrap'` means "cross into the pane on the
+opposite side, but never wrap inside the editor" — the combination that matches
+plain Vim and tmux. `at_edge='split'` and a custom `at_edge` function are
+editor-level intents: they always win over the pane flip.
 
 Note: `at_edge` (Neovim window-edge behaviour: `wrap`/`stop`/`split`/function)
 and `nav_at_edge` (Herdr pane-boundary wrap: `wrap`/`stop`) are two different

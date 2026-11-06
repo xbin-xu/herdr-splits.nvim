@@ -36,6 +36,10 @@ _Avoid_: boundary, border
 What a chord does once it is at both edges (`at_edge` for the editor side, `nav_at_edge` for the pane side): wrap, stop, or split.
 _Avoid_: wrap mode, corner case
 
+**Pane flip**:
+Continuing on the opposite side of the layout, into the pane there, when a chord reaches the pane boundary — decided by `nav_at_edge` alone, before `at_edge` gets a say.
+_Avoid_: cross-wrap, edge wrap
+
 **Most recently focused**:
 Choosing among candidates that are equally adjacent in a direction by focus recency instead of by cursor geometry — tmux's own rule.
 _Avoid_: MRU list, last used

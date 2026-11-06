@@ -837,4 +837,105 @@ T['most_recently_focused picks the last focused adjacent window (tmux-style sele
   })
 end
 
+T['the pane flip and the editor edge are decided independently'] = function()
+  -- Layout: A1 | A3 on top, A2 spanning below them, inside one Herdr pane that
+  -- has a pane (B) underneath and nothing left/right/above. With
+  -- `at_edge=stop` + `nav_at_edge=wrap` the two policies must not fight:
+  --   A1 <C-k>  -> crosses into B   (the *pane* boundary wraps)
+  --   A3 <C-l>  -> stays put        (there is no pane on the opposite side, and
+  --                                  at_edge=stop forbids wrapping inside the
+  --                                  editor)
+  -- `split` and a caller function stay editor-level intents: no pane flip.
+  local result = child.lua_func(function()
+    local calls = {}
+    local edges = { up = true, down = false, left = true, right = true }
+    package.loaded['herdr-splits.herdr'] = {
+      is_in_session = function() return true end,
+      unzoom_enabled = function() return false end,
+      current_pane_is_zoomed = function() return false end,
+      current_pane_at_edge = function(d)
+        calls[#calls + 1] = 'edge:' .. d
+        return edges[d]
+      end,
+      nav_at_edge = function() return 'wrap' end,
+      unzoom = function() end,
+      focus_pane_wrap = function(d) calls[#calls + 1] = 'wrap:' .. d; return true end,
+      focus_pane = function(d) calls[#calls + 1] = 'focus:' .. d; return true end,
+    }
+    package.loaded['herdr-splits.nav'] = nil
+    local nav = require('herdr-splits.nav')
+    local config = require('herdr-splits.config')
+    config.most_recently_focused = true
+
+    local function build()
+      vim.cmd('silent! only')
+      vim.o.splitright = true
+      vim.cmd('enew')
+      vim.cmd('split')
+      vim.cmd('wincmd k')
+      vim.cmd('vsplit')
+      local wins = vim.api.nvim_tabpage_list_wins(0)
+      table.sort(wins, function(a, b)
+        local pa, pb = vim.api.nvim_win_get_position(a), vim.api.nvim_win_get_position(b)
+        if pa[1] ~= pb[1] then return pa[1] < pb[1] end
+        return pa[2] < pb[2]
+      end)
+      return wins -- A1, A3, A2
+    end
+
+    local function flipped(joined)
+      return joined:find('wrap:', 1, true) ~= nil or joined:find('focus:', 1, true) ~= nil
+    end
+
+    local function run(at_edge, direction, start_index)
+      calls = {}
+      local wins = build()
+      vim.api.nvim_set_current_win(wins[start_index])
+      nav.move_cursor(direction, { at_edge = at_edge })
+      return {
+        flipped = flipped(table.concat(calls, ',')),
+        same_window = vim.api.nvim_get_current_win() == wins[start_index],
+        windows = #vim.api.nvim_tabpage_list_wins(0),
+        calls = vim.deepcopy(calls),
+      }
+    end
+
+    local crossed = run('stop', 'up', 1)      -- A1 upward: pane B below
+    local stayed_right = run('stop', 'right', 2) -- A3 rightward: nothing to the left
+    local wrapped = run('wrap', 'right', 2)   -- at_edge=wrap still wraps inside
+    local split = run('split', 'right', 2)    -- split keeps its behaviour
+    local function_marker = false
+    local custom = run(function(ctx)
+      function_marker = ctx.direction == 'right'
+    end, 'right', 2)
+
+    return {
+      crossed = crossed,
+      stayed_right = stayed_right,
+      wrapped = wrapped,
+      split = split,
+      custom = custom,
+      function_marker = function_marker,
+    }
+  end)
+
+  -- at_edge=stop + nav_at_edge=wrap: cross the pane, never wrap in the editor.
+  expect.equality(result.crossed.flipped, true)
+  expect.equality(result.crossed.calls[1], 'edge:up')
+  expect.equality(result.crossed.calls[2], 'edge:down')
+  expect.equality(result.stayed_right.flipped, false)
+  expect.equality(result.stayed_right.same_window, true)
+
+  -- at_edge=wrap is unchanged: with no pane on the opposite side it still wraps
+  -- inside the editor (that is the behaviour `stop` above deliberately drops).
+  expect.equality(result.wrapped.flipped, false)
+  expect.equality(result.wrapped.same_window, false)
+
+  -- split / function: editor-level intents, no pane flip.
+  expect.equality(result.split.flipped, false)
+  expect.equality(result.split.windows, 4)
+  expect.equality(result.custom.flipped, false)
+  expect.equality(result.function_marker, true)
+end
+
 return T
