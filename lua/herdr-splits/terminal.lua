@@ -13,6 +13,14 @@
 ---Plain Vim has had the equivalent since plugin/herdr-splits.vim (tnoremap);
 ---this closes the Neovim-side gap.
 ---
+---Mode contract: the chord must not change the terminal's mode. Here that is
+---free — the <expr> map returns nothing, so Terminal-Job mode is never left;
+---the move runs in the scheduler. Plain Vim cannot express an <expr> tnoremap
+---this way and borrows `CTRL-W :` instead (see CONTEXT.md, "Borrow", and
+---docs/adr/0001-terminal-chords-borrow-the-termwinkey-prefix.md). Keep it that
+---way: leaving Job mode repaints the shell scrollback (line numbers, cursor in
+---the output) as a side effect of navigating, which is the bug that ADR fixes.
+---
 ---Opt-in: `setup({ terminal_nav = ... })`.
 local config = require('herdr-splits.config')
 

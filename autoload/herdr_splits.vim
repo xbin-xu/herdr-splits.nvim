@@ -213,9 +213,23 @@ endfunction
 
 " Edge hand-off. Runs when wincmd could not move (Vim is at its edge) and
 " $HERDR_ENV == 1. The pane-level decision belongs to the helper's
-" --pane-only entry point, so this stays glue: spawn it async so the keypress
-" never blocks (system() is unusable from Vim on Windows — verified: empty
-" output / wrong exit codes — hence job_start()).
+" --pane-only entry point, so this stays glue: hand the direction over
+" synchronously.
+"
+" Synchronous on purpose. The helper is a short-lived process (measured on
+" Windows: ~3-15 ms for the Rust build, ~70 ms for the python fallback), and a
+" sync call means the focus has already moved when the chord ends: a second
+" keypress cannot race a hand-off that has not happened yet. Vim has no blocking
+" wait for jobs (job_status() only reports run/fail/dead; jobwait()/job_wait()
+" are Neovim APIs), so "spawn and wait" would mean polling.
+"
+" The argv list is passed straight to the child: no shell, so no quoting and no
+" dependency on 'shell'/'shellcmdflag' — a Windows path with spaces is fine.
+" (The string form of system() goes through 'shell'; with shell=bash.exe a
+" spaced or backslash path fails there, shellescape() included.) Builds that
+" reject system({list}) — E730 on some Vim 9.1 nightlies — fall back to the
+" async spawn rather than failing the chord.
+"
 " Failures — no helper found, interpreter missing, non-zero exit — warn once
 " via echom, then stay silent; a clean run re-arms the warning.
 " One-shot: a bad g: value is static, so say it once instead of per keypress.
@@ -235,12 +249,16 @@ function! s:warn_handoff(msg) abort
   endif
 endfunction
 
-function! s:on_handoff_exit(job, status) abort
+function! s:on_handoff_status(status) abort
   if a:status == 0
     let s:handoff_warn_armed = 1
   else
     call s:warn_handoff('edge hand-off exited with ' . a:status)
   endif
+endfunction
+
+function! s:on_handoff_exit(job, status) abort
+  call s:on_handoff_status(a:status)
 endfunction
 
 function! s:edge_handoff(direction) abort
@@ -251,6 +269,13 @@ function! s:edge_handoff(direction) abort
           \ . '--manifest-path rust/Cargo.toml -- install)')
     return
   endif
+  try
+    call system(l:command)
+    call s:on_handoff_status(v:shell_error)
+    return
+  catch
+    " No system({list}) in this build: same argv, spawned asynchronously.
+  endtry
   try
     let l:job = job_start(
           \ l:command,
@@ -265,31 +290,62 @@ function! s:edge_handoff(direction) abort
   endif
 endfunction
 
+" The key that starts a CTRL-W command in a terminal window (:h 'termwinkey').
+" Empty — the default — means CTRL-W; a set value replaces it, and a chord with
+" a hard-coded CTRL-W would then be typed into the job instead of running.
+" The option keeps the key as it was written — a letter, `<C-L>` or `^I` — so it
+" is turned into the key itself here: expression strings do not understand caret
+" notation, and the `<...>` form needs the backslash form to expand.
+function! s:term_prefix() abort
+  let l:twk = &l:termwinkey
+  if empty(l:twk)
+    return "\<C-W>"
+  endif
+  if strlen(l:twk) == 1
+    return l:twk
+  endif
+  if strlen(l:twk) == 2 && l:twk[0] ==# '^'
+    return nr2char(l:twk[1] ==# '?' ? 127 : char2nr(toupper(l:twk[1])) - 64)
+  endif
+  try
+    return eval('"\' . l:twk . '"')
+  catch
+    return "\<C-W>"
+  endtry
+endfunction
+
+" RHS of the terminal-mode chord for {direction} — evaluated by the <expr>
+" tnoremap while the terminal window is current (see plugin/herdr-splits.vim).
+"
+" Borrow, don't switch modes: in Terminal-Job mode `CTRL-W :` runs one Ex
+" command and returns to Job mode (:h t_CTRL-W_:), the way <C-o> borrows Normal
+" mode from Insert mode. `<C-\><C-n>` would park the terminal in Terminal-Normal
+" mode instead, where Vim paints the shell scrollback like a buffer — line
+" numbers, cursor in the output — until the user presses `i`. Leaving Job mode
+" is the user's own gesture, not a side effect of navigating.
+"
+" Buffers listed in g:herdr_splits_terminal_skip_filetypes keep the key: the
+" program inside owns it (fzf moves its list with CTRL-J/CTRL-K).
+function! herdr_splits#term_nav(direction) abort
+  let l:skip = get(g:, 'herdr_splits_terminal_skip_filetypes', [])
+  if index(l:skip, &l:filetype) >= 0
+    return eval('"\<C-' . a:direction . '>"')
+  endif
+  return s:term_prefix() . ':' . "\<C-U>"
+        \ . "call herdr_splits#nav('" . a:direction . "')" . "\<CR>"
+endfunction
+
 " Move to the split in {key}'s direction; at the edge, hand off to Herdr.
 " With most_recently_focused (shared conf or g: override) a single move
 " picks among the adjacent windows by focus recency, like the Neovim side;
 " otherwise — and for counts — it is a plain wincmd move.
 "
-" {from_term} is set by the terminal-mode mapping (see plugin/herdr-splits.vim).
-" That mapping has to start with <C-\><C-n>, because a Terminal-Job mapping
-" cannot run an Ex command otherwise — so it always leaves Terminal-Job mode
-" before we get here, and Vim then draws the shell scrollback like a normal
-" buffer: line numbers, cursor parked in the output. Nothing was wrong with the
-" old `<C-w>h` tnoremap, which never left Job mode, so restore that contract:
-" when the chord came from Terminal-Job mode and the cursor ends up in a
-" terminal window, put it back into Terminal-Job mode. Navigating into a text
-" window (or a deliberate Terminal-Normal <C-hjkl>) is untouched.
+" Called from the terminal-mode chord through `CTRL-W :` (see
+" herdr_splits#term_nav), which leaves the terminal window in whatever mode it
+" was in, and from normal mode. Extra arguments are accepted and ignored: older
+" mappings passed a `1` for the removed Terminal-Job restore.
 function! herdr_splits#nav(key, ...) abort
-  let l:from_term = a:0 > 0 && a:1
   call s:nav(a:key)
-  " Only undo the mode change our own mapping forced. Arriving in a terminal
-  " window from anywhere else is Vim's business: Vim keeps a terminal window in
-  " Terminal-Normal mode until 'i', and that is left untouched (as is a
-  " deliberate Terminal-Normal <C-hjkl>).
-  " `:startinsert` is ineffective here (:h Terminal-Normal); the key is not.
-  if l:from_term && &buftype ==# 'terminal' && mode() !=# 't'
-    normal! i
-  endif
 endfunction
 
 function! s:nav(key) abort

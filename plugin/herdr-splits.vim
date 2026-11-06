@@ -34,6 +34,14 @@ let g:herdr_splits_script = get(g:, 'herdr_splits_script', '')
 "   autocmd TerminalOpen * tnoremap <buffer> <C-h> <C-h>
 let g:herdr_splits_terminal_nav = get(g:, 'herdr_splits_terminal_nav', 1)
 
+" Terminal buffers whose program owns C-hjkl itself: the chords are handed to
+" the job verbatim instead of moving windows. fzf, for one, moves its list with
+" CTRL-J/CTRL-K (vim-tmux-navigator special-cases exactly that with `IsFZF()`),
+" a nested Vim wants them too, htop and lazygit want some of them. Exact
+" filetype match; empty list = map every terminal.
+let g:herdr_splits_terminal_skip_filetypes =
+      \ get(g:, 'herdr_splits_terminal_skip_filetypes', ['fzf'])
+
 " Optional overrides of the shared conf for this editor's edge hand-off (see
 " s:override_args() in autoload/herdr_splits.vim). Unset = the conf decides:
 "   let g:herdr_splits_nav_at_edge = 'stop'   " 'wrap' | 'stop'
@@ -63,10 +71,17 @@ if $HERDR_ENV ==# '1'
   nnoremap <silent> <C-j> :<C-U>call herdr_splits#nav('j')<CR>
   nnoremap <silent> <C-k> :<C-U>call herdr_splits#nav('k')<CR>
   nnoremap <silent> <C-l> :<C-U>call herdr_splits#nav('l')<CR>
+  " Terminal-Job mode chords borrow the CTRL-W prefix rather than leaving Job
+  " mode: `<C-W>:cmd<CR>` runs one Ex command and comes back to Job mode, the
+  " way <C-o> does in Insert mode (:h t_CTRL-W_:). `<C-\><C-n>` would park the
+  " terminal in Terminal-Normal mode, where Vim paints the shell scrollback
+  " like a buffer (line numbers, cursor in the output) until you press `i`.
+  " Both the prefix ('termwinkey') and the skip list are window/buffer state,
+  " so the RHS is built by herdr_splits#term_nav() when the key fires.
   if g:herdr_splits_terminal_nav
-    tnoremap <silent> <C-h> <C-\><C-n>:<C-U>call herdr_splits#nav('h', 1)<CR>
-    tnoremap <silent> <C-j> <C-\><C-n>:<C-U>call herdr_splits#nav('j', 1)<CR>
-    tnoremap <silent> <C-k> <C-\><C-n>:<C-U>call herdr_splits#nav('k', 1)<CR>
-    tnoremap <silent> <C-l> <C-\><C-n>:<C-U>call herdr_splits#nav('l', 1)<CR>
+    tnoremap <silent> <expr> <C-h> herdr_splits#term_nav('h')
+    tnoremap <silent> <expr> <C-j> herdr_splits#term_nav('j')
+    tnoremap <silent> <expr> <C-k> herdr_splits#term_nav('k')
+    tnoremap <silent> <expr> <C-l> herdr_splits#term_nav('l')
   endif
 endif

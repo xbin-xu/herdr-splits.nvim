@@ -130,6 +130,20 @@ make build        # cargo build --release + install into scripts/bin/
 make check        # all of the above
 ```
 
+The two pty tests (`tests/vim/test_nav_term_mode.vim`,
+`tests/vim/test_term_nav_render.vim`) are opt-in, because they open real
+ConPTY consoles: run them with `HERDR_SPLITS_TEST_TERM=1`, and note that the
+render test drives a *nested* Vim and reads its drawn screen with
+`term_getline()` — a t-mode mapping is only resolved by a real pty, and only
+the grid can tell Terminal-Job mode from Terminal-Normal mode.
+
+Tear those ptys down in order: let the inner editor kill its own terminal job
+and quit, and only force-kill the pty if it is still running. Killing a ConPTY
+out from under a live msys Vim leaves an orphaned `conhost.exe` that spins a
+core, and makes the Cygwin runtime print `fhandler_console::pcon_hand_over_proc:
+Acquiring pcon_ho_mutex failed.` on that Vim's stderr as it finally exits (its
+parent pty, and the pty's `PIPE_SW_MUTEX`, are already gone).
+
 The Rust end-to-end tests drive the real binary with `--replay`, which answers
 RPC calls from a fixture instead of the socket. That means they pass on a
 machine where Herdr is not running (or runs elevated and refuses ordinary

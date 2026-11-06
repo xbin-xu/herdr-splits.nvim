@@ -161,8 +161,11 @@ Inside a Herdr pane the plugin:
   the Neovim `setup()` (override per editor with
   `let g:herdr_splits_most_recently_focused = 0` or `1`);
 - hands the direction to `scripts/bin/herdr-splits nav --pane-only` (the same
-  Rust helper the Herdr actions run) asynchronously when Vim is at its edge.
-  If the helper has not been built, it falls back to
+  Rust helper the Herdr actions run) when Vim is at its edge. The hand-off is
+  synchronous — the helper lives for milliseconds, and a chord should not race a
+  focus change that has not happened yet — and the argv list goes straight to
+  the process, so no shell, no quoting, no `system()` string pitfalls on
+  Windows. If the helper has not been built, it falls back to
   `python -S scripts/herdr-nav.py --pane-only`.
 
 Configuration (set before the plugin loads):
@@ -172,6 +175,8 @@ let g:herdr_splits_bin = ''                   " explicit helper path (default: t
 let g:herdr_splits_python = 'python'          " fallback interpreter, only if the helper is missing
 let g:herdr_splits_script = ''                " fallback herdr-nav.py path
 let g:herdr_splits_most_recently_focused = 1  " override the shared conf
+let g:herdr_splits_terminal_nav = 1           " terminal-mode chords (install-time opt-out)
+let g:herdr_splits_terminal_skip_filetypes = ['fzf']  " terminal programs that keep C-hjkl
 ```
 
 If you also use vim-tmux-navigator, disable its mappings in the vimrc (before
@@ -206,20 +211,38 @@ Notes:
   `--nav-at-edge` / `--unzoom`): `let g:herdr_splits_nav_at_edge = 'stop'` and
   `let g:herdr_splits_unzoom_on_nav = 0`. Leave them unset and the conf decides.
   `g:herdr_splits_most_recently_focused` is forwarded too, so the pane-level
-  pick agrees with the in-window one. A chord pressed
-  in Terminal-Job mode leaves you in Terminal-Job mode — the mapping has to
-  drop out of it to run (a t-mode mapping cannot execute an Ex command
-  otherwise), so the plugin switches the window back, and you see the terminal
-  rather than line numbers over the shell output. Entering a terminal window from
-  elsewhere is left to Vim: it keeps such a window in Terminal-Normal mode until
-  `i`, and the plugin does not override that. `<C-\><C-n>` itself still gives you
-  the scrollback (Terminal-Normal), which is what it is for. Neovim's
-  equivalent is opt-in and allow-listed (`terminal_nav`, see 2c) because there
-  it only *replaces* interception a distribution already does. Opt out of it
-  in Vim with `let g:herdr_splits_terminal_nav = 0` (install-time: normal mode
-  keeps working, no t-mode map is defined). To keep the chords for a single
-  terminal buffer or a terminal plugin, win the mapping yourself — buffer-local
-  beats global, and the plugin then never shadows it:
+  pick agrees with the in-window one.
+
+  In terminal mode the chord **borrows Vim's `CTRL-W` prefix** instead of
+  leaving Terminal-Job mode: it expands to `<C-W>:call herdr_splits#nav('k')<CR>`
+  (`:h t_CTRL-W_:`), the way `<C-o>` borrows Normal mode from Insert mode. The
+  terminal window you pressed it in therefore stays in Terminal-Job mode, so the
+  shell is never repainted as a buffer with line numbers over it. That is the
+  same mechanism vim-tmux-navigator uses — its t-mode maps also start with
+  `<C-W>:` — which is why navigating in tmux never showed the scrollback. The
+  prefix follows `'termwinkey'`, so a non-default value keeps working;
+  `<C-\><C-n>` stays *your* gesture for looking at the scrollback.
+
+  Entering a terminal window from elsewhere is left to Vim, which keeps such a
+  window in Terminal-Normal mode until `i`: the chord does not force Job mode on
+  a window you deliberately parked.
+
+  Some terminal programs own `C-hjkl` themselves — fzf moves its list with
+  `CTRL-J`/`CTRL-K`, a nested Vim wants them, lazygit takes some — so their
+  buffers keep the keys and the chord is handed to the program verbatim
+  (exact `filetype` match, empty list = map every terminal):
+
+  ```vim
+  let g:herdr_splits_terminal_skip_filetypes = ['fzf']   " the default
+  ```
+
+  Neovim's equivalent is opt-in and allow-listed (`terminal_nav`, see 2c)
+  because there it only *replaces* interception a distribution already does.
+  Opt out of the Vim t-mode maps entirely with
+  `let g:herdr_splits_terminal_nav = 0` (install-time: normal mode keeps working,
+  no t-mode map is defined). To keep the chords for a single terminal buffer or
+  a terminal plugin, win the mapping yourself — buffer-local beats global, and
+  the plugin then never shadows it:
 
   ```vim
   autocmd TerminalOpen * tnoremap <buffer> <C-h> <C-h>
@@ -618,6 +641,13 @@ Plain Vim mirrors the local move (including the shared `most_recently_focused`
 choice) and delegates at its edge to `herdr-nav.py --pane-only`. The
 Neovim-only `at_edge` modes, float/sidebar handling, and local wrap do not
 apply in plain Vim.
+
+In terminal mode both editors keep the chord out of the job without changing
+modes: plain Vim borrows `CTRL-W :` (see 2b), Neovim never leaves Terminal-Job
+mode because its `terminal_nav` mapping is an `<expr>` map that returns nothing
+and schedules the move. That is why the two behave identically on the "line
+numbers over the shell" front, and why nothing here depends on how often the
+terminal is repainted.
 
 ### Resizing
 
