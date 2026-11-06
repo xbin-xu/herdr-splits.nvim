@@ -22,6 +22,7 @@ mod ctx;
 mod doctor;
 mod editor;
 mod geometry;
+mod init;
 mod install;
 mod json;
 mod mru;
@@ -76,6 +77,17 @@ impl Failure {
 }
 
 fn run(options: &Options) -> Result<ExitCode, Failure> {
+    // Every real command that *decides* something also makes the instance policy
+    // exist: the first keypress (or the first install) leaves a file to edit
+    // instead of only living inside the defaults. Best-effort and silent —
+    // `doctor` is read-only on purpose, and `init` writes with a message.
+    if matches!(
+        options.command,
+        Command::Nav { .. } | Command::Resize { .. }
+    ) {
+        init::ensure(&ctx::config_path());
+    }
+
     match &options.command {
         Command::Help => {
             print!("{}", cli::help_text());
@@ -86,6 +98,7 @@ fn run(options: &Options) -> Result<ExitCode, Failure> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Install { root } => run_install(root.clone()),
+        Command::Init { force, print } => run_init(*force, *print),
         Command::Doctor => run_doctor(options),
         Command::Nav {
             pane_only,
@@ -217,6 +230,25 @@ fn call_failure(command: &str, error: &RpcError) -> Failure {
     }
 }
 
+fn run_init(force: bool, print: bool) -> Result<ExitCode, Failure> {
+    // `ctx::config_path()` is the same resolution every reader uses
+    // (`HERDR_SPLITS_CONFIG`, then `HERDR_PLUGIN_CONFIG_DIR`, then the platform
+    // default), so the scaffold lands exactly where the helper will look.
+    let path = ctx::config_path();
+    // A write failure is an environment problem (read-only config dir, a locked
+    // file), not a usage error: exit 1, matching `install`.
+    match init::run(&path, force, print).map_err(|err| Failure::new(err, 1))? {
+        init::Outcome::Printed => {
+            print!("{}", init::scaffold());
+        }
+        init::Outcome::Wrote(path) => {
+            println!("wrote {}", path.display());
+            println!("edit it to set the instance policy; delete it to fall back to the defaults");
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
 fn run_install(root: Option<PathBuf>) -> Result<ExitCode, Failure> {
     let exe = std::env::current_exe().map_err(|err| {
         Failure::new(
@@ -256,6 +288,10 @@ fn run_install(root: Option<PathBuf>) -> Result<ExitCode, Failure> {
         outcome.source.display(),
         outcome.destination.display()
     );
+    // Create the instance policy alongside the binary so a fresh install has
+    // something to edit. Silent: `init` is the command that reports, and the
+    // scaffold only spells out the defaults anyway.
+    init::ensure(&ctx::config_path());
     Ok(ExitCode::SUCCESS)
 }
 

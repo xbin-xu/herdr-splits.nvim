@@ -1,14 +1,21 @@
 //! Shared config file parsing (`herdr-splits.conf`).
 //!
-//! The conf is *generated* by the Neovim side and only ever read here, but a
-//! legacy/hand-edited conf must still parse the way the bash fallback's
-//! `sed | tail -n 1` and the Python `_conf_value` do: last value wins, `#`
-//! starts a trailing comment, blank lines and full-line comments are skipped.
+//! The conf is the instance policy: `init` (and the helper's `ensure` call)
+//! writes a scaffold, and every participant — this helper, plain Vim, Neovim —
+//! only reads it afterwards. A legacy/hand-edited conf parses the same way as a
+//! generated one: last value wins, `#` starts a trailing comment, blank lines
+//! and full-line comments are skipped.
 
 use std::fs;
 use std::path::Path;
 
 use crate::geometry::Direction;
+
+/// The marker line `setup({ overwrite_conf = true })` stamps into the conf it
+/// generates (`lua/herdr-splits/conf.lua` MARKER). Its presence tells every
+/// reader — and `doctor` — that the file is the plugin's output, not the
+/// user's. A headerless conf is never overwritten.
+pub const CONF_MARKER: &str = "# herdr-splits-generated-v1";
 
 /// Chord forwarded into the editor for a nav key, per direction.
 pub fn default_nav_key(direction: Direction) -> &'static str {
@@ -40,7 +47,9 @@ pub enum Kind {
 pub struct Config {
     /// Chord forwarded into a Neovim pane for this keypress.
     pub key: String,
-    /// Auto-unzoom when navigating away from a zoomed pane (`unzoom_on_nav`).
+    /// Unzoom when navigating away from a zoomed pane (`unzoom_on_nav`).
+    /// Default off: the pane stays zoomed and the zoom follows the focus; on,
+    /// the pane is unzoomed first so the destination is visible.
     pub unzoom: bool,
     /// Wrap at the pane boundary (`nav_at_edge`); `false` means `stop`.
     pub wrap_at_edge: bool,
@@ -51,11 +60,11 @@ pub struct Config {
 /// Caller-supplied overrides of the shared conf.
 ///
 /// The conf is one file per Herdr instance (`$HERDR_PLUGIN_CONFIG_DIR`, else
-/// `~/.config/herdr/plugins/config/herdr-splits/herdr-splits.conf`), and only
-/// a Neovim `setup()` writes it — so it cannot represent two editors'
-/// preferences, and plain Vim has no channel at all. The editor that owns the
-/// edge hand-off therefore passes its own values on the command line; anything
-/// it does not pass keeps the conf value.
+/// `~/.config/herdr/plugins/config/herdr-splits/herdr-splits.conf`), owned by the
+/// user and created by `init` (or by the helper's `ensure`). An editor may pass
+/// its own values on the command line for the one hand-off it is doing — plain
+/// Vim has no other channel — and anything it does not pass keeps the conf
+/// value.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Overrides {
     /// `unzoom_on_nav`
@@ -83,29 +92,42 @@ impl Overrides {
 
 impl Config {
     /// Defaults with the direction's built-in chord filled in.
+    ///
+    /// These are the single source of truth for behaviour when the conf is
+    /// missing, and `init::scaffold()` writes exactly these values — so a fresh
+    /// install (no conf) and a freshly created conf behave identically. They
+    /// mirror `managed_defaults` on the Neovim side and the Python fallback.
     pub fn defaults(kind: Kind, direction: Direction) -> Config {
         Config {
             key: match kind {
                 Kind::Nav => default_nav_key(direction).to_string(),
                 Kind::Resize => default_resize_key(direction).to_string(),
             },
-            unzoom: true,
+            unzoom: false,
             wrap_at_edge: true,
-            most_recently_focused: false,
+            most_recently_focused: true,
         }
     }
 
     /// Read the shared conf. A missing or unreadable file is not an error: the
-    /// defaults are authoritative then (the file is generated on `setup()`).
+    /// defaults are authoritative then (`init::ensure` creates the scaffold on
+    /// the first run, so a missing file normally means a read-only config dir).
     pub fn load(path: &Path, kind: Kind, direction: Direction) -> Config {
-        let mut config = Config::defaults(kind, direction);
+        let config = Config::defaults(kind, direction);
         let Ok(text) = fs::read(path) else {
             return config;
         };
         // `errors="ignore"` on the Python side: decode lossily rather than
         // rejecting a file with a stray byte.
         let text = String::from_utf8_lossy(&text);
-        config.apply(&text, kind, direction);
+        Config::load_text(&text, kind, direction)
+    }
+
+    /// Parse conf text (in-memory counterpart of `load`, used by `init`'s
+    /// round-trip test and by anything that already has the bytes).
+    pub fn load_text(text: &str, kind: Kind, direction: Direction) -> Config {
+        let mut config = Config::defaults(kind, direction);
+        config.apply(text, kind, direction);
         config
     }
 
@@ -210,9 +232,11 @@ most_recently_focused=true
     fn defaults_match_the_documented_chords() {
         let config = Config::defaults(Kind::Nav, Direction::Left);
         assert_eq!(config.key, "ctrl+h");
-        assert!(config.unzoom);
+        // Shipped defaults: no auto-unzoom (the pane stays zoomed and the zoom
+        // follows the focus), wrap at the pane edge, tmux-style target choice on.
+        assert!(!config.unzoom);
         assert!(config.wrap_at_edge);
-        assert!(!config.most_recently_focused);
+        assert!(config.most_recently_focused);
 
         assert_eq!(
             Config::defaults(Kind::Resize, Direction::Right).key,

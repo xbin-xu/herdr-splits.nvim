@@ -1,5 +1,5 @@
----herdr-splits shared config file (generated artifact) + notation translator.
----Owns everything about `herdr-splits.conf`: path resolution, reading existing
+---herdr-splits shared config file (the instance policy) + notation translator.
+---Owns everything about `herdr-splits.conf`: path resolution, reading the
 ---managed values, translating Neovim key notation to Herdr chord notation,
 ---and writing the resolved config back (atomically). Requires nothing else
 ---from this plugin (avoiding a require-cycle with config.lua).
@@ -138,22 +138,40 @@ function M.to_nvim(chord)
   return '<' .. table.concat(mods, '-') .. '-' .. name .. '>'
 end
 
----Parse the shared config file for the managed keys only. When the file
----carries the generated MARKER it is the plugin's own output and is NOT read
----back (setup() is authoritative — removing an opt reverts to default). When
----the MARKER is absent (a legacy/hand-edited conf) the managed values are
----parsed and adopted once; the second return value is true only when at
----least one managed value was found, so the caller can emit a one-time
----migration notice. Returns `({}, false)` for a missing/marker-tagged file;
----last occurrence wins (matches the scripts' `tail -n 1`).
----@return table values, boolean adopted
-function M.read_managed()
+---Whether `text` carries the generated MARKER. Present means the file is
+---setup()'s own output (a projection of the managed opts); absent means the
+---file belongs to the user, and setup() must never overwrite it.
+---@param text string
+---@return boolean
+function M.is_generated(text)
+  for line in text:gmatch('[^\n]+') do
+    if line:match('^%s*' .. vim.pesc(MARKER) .. '%s*$') then return true end
+  end
+  return false
+end
+
+---Parse the shared config file for the managed keys only. `#` starts a
+---trailing comment, blank lines are skipped, and the LAST occurrence of a key
+---wins (matching the Herdr-side scripts' `tail -n 1`). Returns `({}, false)`
+---for a missing file.
+---
+---`ignore_generated` picks the authority:
+---* `false`/`nil` — the conf file is authoritative (`overwrite_conf` off, the
+---  default). Every value is honoured, including a file `setup()` generated in
+---  an earlier session, so taking ownership by deleting the marker line and an
+---  upgrade from the setup-authoritative era both keep working.
+---* `true` — `setup()` is authoritative (`overwrite_conf` on). A file carrying
+---  the MARKER is our own projection and is NOT read back, so removing an opt
+---  reverts to its default on the next start.
+---@param ignore_generated boolean|nil
+---@return table values, boolean had_managed_values
+function M.read_managed(ignore_generated)
   local f = io.open(M.path(), 'r')
   if not f then return {}, false end
   local out = { nav_keys = {}, resize_keys = {} }
   for line in f:lines() do
-    -- Generated marker anywhere => our own output; do not adopt it back.
-    if line:match('^%s*' .. vim.pesc(MARKER) .. '%s*$') then
+    -- setup()-authoritative mode: our own output is not read back.
+    if ignore_generated and line:match('^%s*' .. vim.pesc(MARKER) .. '%s*$') then
       f:close()
       return {}, false
     end
@@ -167,13 +185,13 @@ function M.read_managed()
         if dir then
           out.resize_keys[dir] = v
         elseif k == 'unzoom_on_nav' then
-          out.unzoom_on_nav = (v ~= 'false')
+          -- Case-insensitive, like the Rust/Python/Vim readers.
+          out.unzoom_on_nav = (v:lower() ~= 'false')
         elseif k == 'nav_at_edge' then
           out.nav_at_edge = (v == 'stop' and 'stop' or 'wrap')
         elseif k == 'most_recently_focused' then
-          -- Default-off key: only the literal 'true' enables (the generated
-          -- conf and the Herdr-side scripts parse it the same way).
-          out.most_recently_focused = (v == 'true')
+          -- Case-insensitive: only `true` enables it, anything else disables.
+          out.most_recently_focused = (v:lower() == 'true')
         end
       end
     end
@@ -194,18 +212,28 @@ end
 ---os.rename so a script never observes a partial write and two concurrent
 ---Neovim instances don't share a temp inode. Skips the write entirely when the
 ---content is unchanged (preserves mtime, reduces multi-instance contention).
+---
+---This is the *only* writer, and it only runs for `setup({ overwrite_conf =
+---true })`: with the default (`false`) no code path touches the file, which is
+---the real guarantee that a hand-written conf survives. When it does run on a
+---headerless file it takes the file over (stamping the MARKER); setup() warns
+---that it adopted those values first.
 ---Returns (true, nil) on success or (false, err) on failure; callers wrap in
 ---pcall so a write failure never crashes startup.
----@param resolved table resolved managed config (nav_keys, resize_keys, unzoom_on_nav, nav_at_edge)
+---@param resolved table resolved managed config (nav_keys, resize_keys, unzoom_on_nav, nav_at_edge, most_recently_focused)
 ---@return boolean ok, string|nil err
 function M.write(resolved)
   local path = M.path()
   local lines = {
     MARKER,
     '# herdr-splits plugin config — GENERATED by herdr-splits.nvim setup().',
-    '# Regenerated from defaults + setup() opts on every setup(); do not edit by hand.',
-    '# A headerless/legacy conf is adopted once on migration (see the startup',
-    '# notice), then overwritten thereafter — remove an opt in setup() to revert.',
+    '# Written because setup({ overwrite_conf = true }): this file is a projection',
+    '# of the Lua options and is regenerated on every setup() — remove an opt in',
+    '# setup() to revert it to the default.',
+    '#',
+    '# To make this file yours: delete the marker line above (and set',
+    '# overwrite_conf = false, the default). setup() then reads it as the instance',
+    '# policy and never overwrites it. `herdr-splits init` writes a fresh scaffold.',
     'nav_key_left='     .. resolved.nav_keys.left,
     'nav_key_down='     .. resolved.nav_keys.down,
     'nav_key_up='       .. resolved.nav_keys.up,
@@ -220,11 +248,11 @@ function M.write(resolved)
   }
   local content = table.concat(lines, '\n') .. '\n'
 
-  -- Skip when unchanged: only when the existing file's bytes match exactly.
   local existing = io.open(path, 'r')
   if existing then
     local prev = existing:read('*a')
     existing:close()
+    -- Skip when unchanged: only when the existing bytes match exactly.
     if prev == content then return true end
   end
 

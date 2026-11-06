@@ -37,12 +37,22 @@ esac
 . "$(dirname "$0")/herdr-common.sh"
 
 # Resolve the forward chord, `unzoom_on_nav` and `nav_at_edge` from the
-# shared config file (defaults: ctrl+hjkl, unzoom enabled, wrap).
+# shared config file. Fallbacks are the shipped defaults (ctrl+hjkl, keep the
+# zoom, nav_at_edge=wrap) and must match `Config::defaults` in the Rust helper
+# and `managed_defaults` on the Neovim side.
+#
+# Only the two booleans are matched case-insensitively (and both ways round: a
+# value is honoured whatever it is, not only when it differs from the current
+# default). `nav_at_edge` is an enum and is compared verbatim — `STOP` means
+# `wrap` here exactly as it does in the Rust, Python and Lua readers.
 configured_key=$(herdr_splits_conf_value "$config_key")
 if [ -n "$configured_key" ]; then key="$configured_key"; fi
-unzoom=1
-if [ "$(herdr_splits_conf_value unzoom_on_nav)" = "false" ]; then unzoom=0; fi
+unzoom=0
+unzoom_conf=$(herdr_splits_conf_value unzoom_on_nav | tr '[:upper:]' '[:lower:]')
+if [ "$unzoom_conf" = "true" ]; then unzoom=1; fi
 nav_at_edge=$(herdr_splits_conf_value nav_at_edge)
+# An absent key means the default, and the default is `wrap` — which is also
+# what "any value that is not `stop`" already means below, so no fallback.
 
 # herdr injects HERDR_PANE_ID into plugin actions (and panes); fall back to
 # a pane.current query only when it is missing (manual invocation).

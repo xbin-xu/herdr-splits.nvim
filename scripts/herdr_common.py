@@ -149,12 +149,19 @@ RESIZE_DEFAULT_KEYS = {"left": "alt+h", "down": "alt+j", "up": "alt+k", "right":
 
 
 def read_config(kind: str, direction: str) -> dict:
-    """Read the shared herdr-splits.conf. kind: 'nav' or 'resize'."""
+    """Read the shared herdr-splits.conf. kind: 'nav' or 'resize'.
+
+    Mirrors the Rust reader exactly (`config::conf_value`): '#' starts a comment,
+    the LAST occurrence of a key wins, and an empty value means unset. Every key
+    is parsed symmetrically — a value is honoured whatever it is, not only when
+    it happens to differ from the current default (flipping a default must not
+    make the opposite value unrepresentable).
+    """
     cfg = {
         "key": (NAV_DEFAULT_KEYS if kind == "nav" else RESIZE_DEFAULT_KEYS)[direction],
-        "unzoom": True,
+        "unzoom": False,
         "nav_at_edge": "wrap",
-        "most_recently_focused": False,
+        "most_recently_focused": True,
     }
     config_path = resolve_config_path()
     try:
@@ -162,16 +169,33 @@ def read_config(kind: str, direction: str) -> dict:
     except OSError:
         return cfg
 
+    def last_value(key: str) -> Optional[str]:
+        found = None
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            name, _, rest = stripped.partition("=")
+            if name.strip() != key:
+                continue
+            value = rest.split("#", 1)[0].strip()
+            if value:
+                found = value
+        return found
+
     config_key = f"{'nav' if kind == 'nav' else 'resize'}_key_{direction}"
-    m = re.findall(rf"^\s*{config_key}\s*=\s*([^\s#]+)", text, re.MULTILINE)
-    if m:
-        cfg["key"] = m[-1]
-    if re.search(r"^\s*unzoom_on_nav\s*=\s*false", text, re.MULTILINE):
-        cfg["unzoom"] = False
-    if re.search(r"^\s*nav_at_edge\s*=\s*stop", text, re.MULTILINE):
-        cfg["nav_at_edge"] = "stop"
-    if re.search(r"^\s*most_recently_focused\s*=\s*true", text, re.MULTILINE):
-        cfg["most_recently_focused"] = True
+    key = last_value(config_key)
+    if key:
+        cfg["key"] = key
+    unzoom = last_value("unzoom_on_nav")
+    if unzoom is not None:
+        cfg["unzoom"] = unzoom.lower() != "false"
+    nav_at_edge = last_value("nav_at_edge")
+    if nav_at_edge is not None:
+        cfg["nav_at_edge"] = "stop" if nav_at_edge == "stop" else "wrap"
+    most_recently_focused = last_value("most_recently_focused")
+    if most_recently_focused is not None:
+        cfg["most_recently_focused"] = most_recently_focused.lower() == "true"
     return cfg
 
 

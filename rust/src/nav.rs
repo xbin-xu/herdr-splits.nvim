@@ -157,8 +157,15 @@ mod tests {
         ReplayClient::from_json_lines(fixture).expect("fixture")
     }
 
+    /// Geometric baseline for these cases: wrap on, tmux-style selection off.
+    /// (The shipped defaults are the other way round — `stop` + MRU on — and are
+    /// covered by `config::tests` and the `e2e` default test; MRU needs a
+    /// `pane.layout` fixture, which is `mru::tests`' job.)
     fn nav_config() -> Config {
-        Config::defaults(Kind::Nav, Direction::Left)
+        let mut config = Config::defaults(Kind::Nav, Direction::Left);
+        config.wrap_at_edge = true;
+        config.most_recently_focused = false;
+        config
     }
 
     fn methods(client: &ReplayClient) -> Vec<&str> {
@@ -462,6 +469,8 @@ mod tests {
 
     #[test]
     fn plain_pane_unzooms_before_deciding() {
+        let mut config = nav_config();
+        config.unzoom = true;
         let fixture = [
             plain_detection(),
             edges_response(true, &[("A", 0, 40), ("B", 40, 40)]),
@@ -473,7 +482,7 @@ mod tests {
         let mut client = replay(&fixture);
         run(
             &mut Panes::new(&mut client),
-            &nav_config(),
+            &config,
             Path::new("conf"),
             "A",
             Direction::Left,

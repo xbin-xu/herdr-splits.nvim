@@ -98,10 +98,16 @@ T['skip_filetypes wins over filetypes'] = function()
   expect.equality(vim.tbl_count(t_maps(open_term('run'))), 4)
 end
 
-T['maps follow nav_keys'] = function()
+T['maps follow the chords in the conf'] = function()
+  -- Chords are instance policy: Herdr forwards them, so they live in the conf.
+  child.lua([[vim.fn.writefile({
+    'nav_key_left=alt+left',
+    'nav_key_down=alt+down',
+    'nav_key_up=alt+up',
+    'nav_key_right=alt+right',
+  }, vim.env.HERDR_SPLITS_CONFIG)]])
   child.lua([[
     require('herdr-splits').setup({
-      nav_keys = { left = '<M-Left>', down = '<M-Down>', up = '<M-Up>', right = '<M-Right>' },
       terminal_nav = { filetypes = { 'snacks_terminal' } },
     })
   ]])

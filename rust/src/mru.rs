@@ -157,6 +157,7 @@ mod tests {
     #[test]
     fn picks_the_only_candidate_and_records_the_move() {
         let conf_path = temp_conf_dir("basic");
+        let config = conf(crate::config::Kind::Nav, Direction::Right);
         let fixture = [
             layout_fixture(false),
             r#"{"method":"pane.focus","response":{"result":{}}}"#.to_string(),
@@ -166,7 +167,7 @@ mod tests {
         let pick = mru_focus(
             &mut Panes::new(&mut client),
             &conf_path,
-            &conf(crate::config::Kind::Nav, Direction::Right),
+            &config,
             Direction::Right,
             "A",
         )
@@ -181,6 +182,7 @@ mod tests {
     #[test]
     fn prefers_history_over_server_order() {
         let conf_path = temp_conf_dir("history");
+        let config = conf(crate::config::Kind::Nav, Direction::Right);
         super::save(&mru_path(&conf_path), &["B".to_string(), "A".to_string()]);
         // Three panes in a row: A | B | C, moving right from A.
         let fixture = [
@@ -195,7 +197,7 @@ mod tests {
         let pick = mru_focus(
             &mut Panes::new(&mut client),
             &conf_path,
-            &conf(crate::config::Kind::Nav, Direction::Right),
+            &config,
             Direction::Right,
             "A",
         )
@@ -213,10 +215,12 @@ mod tests {
         ]
         .join("\n");
         let mut client = replay(&fixture);
+        let mut config = conf(crate::config::Kind::Nav, Direction::Left);
+        config.wrap_at_edge = true;
         let pick = mru_focus(
             &mut Panes::new(&mut client),
             &conf_path,
-            &conf(crate::config::Kind::Nav, Direction::Left),
+            &config,
             Direction::Left,
             "A",
         )
@@ -247,6 +251,8 @@ mod tests {
     #[test]
     fn unzooms_first_when_enabled() {
         let conf_path = temp_conf_dir("unzoom");
+        let mut config = conf(crate::config::Kind::Nav, Direction::Right);
+        config.unzoom = true;
         let fixture = [
             layout_fixture(true),
             r#"{"method":"pane.zoom","response":{"result":{}}}"#.to_string(),
@@ -258,7 +264,7 @@ mod tests {
         let pick = mru_focus(
             &mut Panes::new(&mut client),
             &conf_path,
-            &conf(crate::config::Kind::Nav, Direction::Right),
+            &config,
             Direction::Right,
             "A",
         )

@@ -8,6 +8,7 @@
 //!                  [--most-recently-focused=on|off] <left|down|up|right>
 //! herdr-splits resize <left|down|up|right> [amount]
 //! herdr-splits install [--root <plugin-root>]
+//! herdr-splits init [--force] [--print]
 //! herdr-splits doctor
 //! herdr-splits --version
 //! ```
@@ -43,6 +44,10 @@ pub enum Command {
     Install {
         root: Option<PathBuf>,
     },
+    Init {
+        force: bool,
+        print: bool,
+    },
     Doctor,
     Version,
     Help,
@@ -71,7 +76,7 @@ impl UsageError {
     }
 }
 
-const USAGE: &str = "usage: herdr-splits <nav|resize|install|doctor> ...";
+const USAGE: &str = "usage: herdr-splits <nav|resize|install|init|doctor> ...";
 
 const NAV_USAGE: &str = concat!(
     "usage: herdr-splits nav [--pane-only] ",
@@ -96,6 +101,7 @@ COMMANDS:
                                            --most-recently-focused=on|off
   resize <left|down|up|right> [amount]     resize the focused pane (default {DEFAULT_AMOUNT})
   install [--root <plugin-root>]           copy this binary into <root>/scripts/bin
+  init [--force] [--print]                 write a herdr-splits.conf scaffold (instance policy)
   doctor                                   print resolved paths and probe the server
 
 OPTIONS:
@@ -160,10 +166,15 @@ pub fn parse(args: &[String]) -> Result<Options, UsageError> {
                 positional.push(arg.to_string());
                 index += 1;
             }
-            // `--root` belongs to the `install` subcommand: keep it (and its
-            // value) positional so the subcommand parses it, and leave the
-            // unknown-flag check to the subcommand's own loop.
-            other if other == "--root" || other.starts_with("--root=") => {
+            // `--root` belongs to the `install` subcommand, `--force`/`--print`
+            // to `init`: keep them positional so the subcommand parses them, and
+            // leave the unknown-flag check to the subcommand's own loop.
+            other
+                if other == "--root"
+                    || other.starts_with("--root=")
+                    || other == "--force"
+                    || other == "--print" =>
+            {
                 positional.push(other.to_string());
                 index += 1;
             }
@@ -263,6 +274,22 @@ pub fn parse(args: &[String]) -> Result<Options, UsageError> {
                 }
             }
             Command::Install { root }
+        }
+        "init" => {
+            let mut force = false;
+            let mut print = false;
+            for arg in &positional[1..] {
+                match arg.as_str() {
+                    "--force" => force = true,
+                    "--print" => print = true,
+                    other => {
+                        return Err(UsageError::new(format!(
+                            "usage: herdr-splits init [--force] [--print] (unexpected {other:?})"
+                        )))
+                    }
+                }
+            }
+            Command::Init { force, print }
         }
         "doctor" => {
             if positional.len() > 1 {
@@ -492,6 +519,40 @@ mod tests {
             &parse_err(&["install", "--bogus"]),
             "unknown option"
         ));
+    }
+
+    #[test]
+    fn init_takes_force_and_print() {
+        assert_eq!(
+            parse_ok(&["init"]).command,
+            Command::Init {
+                force: false,
+                print: false
+            }
+        );
+        assert_eq!(
+            parse_ok(&["init", "--force"]).command,
+            Command::Init {
+                force: true,
+                print: false
+            }
+        );
+        assert_eq!(
+            parse_ok(&["init", "--print"]).command,
+            Command::Init {
+                force: false,
+                print: true
+            }
+        );
+        assert_eq!(
+            parse_ok(&["init", "--force", "--print"]).command,
+            Command::Init {
+                force: true,
+                print: true
+            }
+        );
+        assert!(contains(&parse_err(&["init", "--bogus"]), "unknown option"));
+        assert!(contains(&parse_err(&["init", "extra"]), "usage"));
     }
 
     #[test]

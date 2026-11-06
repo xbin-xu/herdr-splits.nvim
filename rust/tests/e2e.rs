@@ -57,6 +57,26 @@ impl Drop for TempDir {
     }
 }
 
+/// A scratch conf nobody else uses, so a test that expects "no conf" really has
+/// none instead of reading (and having created) the host's. Unique per call:
+/// cargo runs one binary's tests in parallel threads, so a shared path would let
+/// one test's cleanup delete a conf another test had just created.
+fn sandbox_conf() -> String {
+    static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let serial = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let root = match std::env::var_os("HERDR_SPLITS_TEST_TMP") {
+        Some(override_root) if !override_root.is_empty() => PathBuf::from(override_root),
+        _ => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("e2e-tmp"),
+    };
+    let dir = root.join(format!("sandbox-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join(format!("herdr-splits-{serial}.conf"))
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn run(args: &[&str], env: &[(&str, &str)]) -> Output {
     let mut command = Command::new(BIN);
     command.args(args);
@@ -72,10 +92,26 @@ fn run(args: &[&str], env: &[(&str, &str)]) -> Output {
     ] {
         command.env_remove(name);
     }
+    // `nav`/`resize`/`install` create the conf when it is missing, so keep them
+    // away from the host's real config dir unless the test names its own below.
+    let sandbox = sandbox_conf();
+    command.env("HERDR_SPLITS_CONFIG", &sandbox);
+    let overrides_config = env
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("HERDR_SPLITS_CONFIG"));
     for (name, value) in env {
         command.env(name, value);
     }
-    command.output().expect("run binary")
+    let output = command.output().expect("run binary");
+    // The path is unique to this call, so removing it cannot race a sibling test;
+    // the directory goes only once it is empty.
+    if !overrides_config {
+        let _ = std::fs::remove_file(&sandbox);
+        if let Some(parent) = Path::new(&sandbox).parent() {
+            let _ = std::fs::remove_dir(parent);
+        }
+    }
+    output
 }
 
 fn stdout(output: &Output) -> String {
@@ -110,6 +146,10 @@ const PLAIN_DETECTION: &str = "\
 
 const EDGES_AT_LEFT: &str = "{\"method\":\"pane.edges\",\"response\":{\"result\":{\"edges\":{\"pane_id\":\"A\",\"left\":true,\"right\":false,\"up\":true,\"down\":true,\"layout\":{\"zoomed\":false,\"panes\":[{\"pane_id\":\"A\",\"rect\":{\"x\":0,\"y\":0,\"width\":40,\"height\":20}},{\"pane_id\":\"B\",\"rect\":{\"x\":40,\"y\":0,\"width\":40,\"height\":20}}]}}}}}\n";
 
+/// Two plain panes side by side; the MRU path reads `pane.layout` first.
+const LAYOUT: &str = "{\"method\":\"pane.layout\",\"response\":{\"result\":{\"layout\":{\"zoomed\":false,\"panes\":[{\"pane_id\":\"A\",\"rect\":{\"x\":0,\"y\":0,\"width\":40,\"height\":20}},{\"pane_id\":\"B\",\"rect\":{\"x\":40,\"y\":0,\"width\":40,\"height\":20}}]}}}}
+";
+
 #[test]
 fn version_and_help_succeed() {
     let version = run(&["--version"], &[]);
@@ -125,6 +165,41 @@ fn version_and_help_succeed() {
     let text = stdout(&help);
     assert!(text.contains("nav"), "{text}");
     assert!(text.contains("resize"), "{text}");
+}
+
+#[test]
+fn init_writes_a_scaffold_where_the_readers_look() {
+    let dir = TempDir::new("init");
+    let conf = dir.join("herdr-splits.conf");
+    let conf_str = conf.to_str().unwrap();
+
+    let output = run(&["init"], &[("HERDR_SPLITS_CONFIG", conf_str)]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let written = std::fs::read_to_string(&conf).expect("conf written");
+    // Not a generated file: the user owns it from the first byte.
+    assert!(!written.contains("herdr-splits-generated-v1"), "{written}");
+    assert!(written.contains("unzoom_on_nav=false"), "{written}");
+
+    // A second run refuses to replace it (exit 1 = environment refusal, not a
+    // usage error; nothing is clobbered).
+    let again = run(&["init"], &[("HERDR_SPLITS_CONFIG", conf_str)]);
+    assert_eq!(again.status.code(), Some(1));
+    assert!(
+        stderr(&again).contains("already exists"),
+        "{}",
+        stderr(&again)
+    );
+    assert_eq!(std::fs::read_to_string(&conf).unwrap(), written);
+
+    // `--print` writes to stdout and touches nothing.
+    let other = dir.join("printed.conf");
+    let printed = run(
+        &["init", "--print"],
+        &[("HERDR_SPLITS_CONFIG", other.to_str().unwrap())],
+    );
+    assert!(printed.status.success(), "{}", stderr(&printed));
+    assert!(stdout(&printed).contains("nav_key_left=ctrl+h"));
+    assert!(!other.exists());
 }
 
 #[test]
@@ -194,8 +269,12 @@ fn nav_forwards_the_chord_into_an_editor_pane() {
 }
 
 #[test]
-fn nav_wraps_at_the_edge_for_a_plain_pane() {
+fn nav_wraps_at_the_edge_when_the_conf_says_wrap() {
     let dir = TempDir::new("nav-wrap");
+    let conf = dir.write(
+        "herdr-splits.conf",
+        "nav_at_edge=wrap\nmost_recently_focused=false\n",
+    );
     let fixture = dir.write(
         "fixture.jsonl",
         &format!(
@@ -214,7 +293,10 @@ fn nav_wraps_at_the_edge_for_a_plain_pane() {
             "--trace",
             trace.to_str().unwrap(),
         ],
-        &[("HERDR_PANE_ID", "A")],
+        &[
+            ("HERDR_PANE_ID", "A"),
+            ("HERDR_SPLITS_CONFIG", conf.to_str().unwrap()),
+        ],
     );
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(
@@ -234,9 +316,85 @@ fn nav_wraps_at_the_edge_for_a_plain_pane() {
 }
 
 #[test]
+fn nav_wraps_at_the_edge_by_default() {
+    let dir = TempDir::new("nav-default-wrap");
+    // No conf for this test: the sandbox path is missing, so the built-in
+    // defaults decide — and they are `nav_at_edge=wrap` + `most_recently_focused`
+    // on, so the MRU search already wraps to the pane at the opposite boundary
+    // (here: B, to the right) without ever asking for `pane.edges`.
+    let conf = dir.join("never-written-here.conf");
+    let fixture = dir.write(
+        "fixture.jsonl",
+        &format!(
+            "{PLAIN_DETECTION}{LAYOUT}{}",
+            "{\"method\":\"pane.focus\",\"response\":{\"result\":{}}}"
+        ),
+    );
+    let trace = dir.join("trace.log");
+
+    let output = run(
+        &[
+            "nav",
+            "left",
+            "--replay",
+            fixture.to_str().unwrap(),
+            "--trace",
+            trace.to_str().unwrap(),
+        ],
+        &[
+            ("HERDR_PANE_ID", "A"),
+            ("HERDR_SPLITS_CONFIG", conf.to_str().unwrap()),
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        traced_methods(&trace),
+        vec!["pane.get", "pane.process_info", "pane.layout", "pane.focus"]
+    );
+    let focus = trace_lines(&trace)
+        .into_iter()
+        .find(|line| line.starts_with("pane.focus"))
+        .unwrap();
+    assert!(focus.contains("\"pane_id\":\"B\""), "{focus}");
+}
+
+#[test]
+fn nav_creates_the_conf_on_first_use() {
+    let dir = TempDir::new("nav-ensure");
+    let conf = dir.join("nested/herdr-splits.conf");
+    let fixture = dir.write(
+        "fixture.jsonl",
+        &format!(
+            "{PLAIN_DETECTION}{LAYOUT}{}",
+            "{\"method\":\"pane.focus\",\"response\":{\"result\":{}}}"
+        ),
+    );
+
+    assert!(!conf.exists());
+    let output = run(
+        &["nav", "left", "--replay", fixture.to_str().unwrap()],
+        &[
+            ("HERDR_PANE_ID", "A"),
+            ("HERDR_SPLITS_CONFIG", conf.to_str().unwrap()),
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let written = std::fs::read_to_string(&conf).expect("conf created by nav");
+    // The scaffold spells out the defaults, so creating it cannot change
+    // behaviour — and it carries no generated marker: the user owns it.
+    assert!(!written.contains("herdr-splits-generated-v1"), "{written}");
+    assert!(written.contains("nav_at_edge=wrap"), "{written}");
+    assert!(written.contains("most_recently_focused=true"), "{written}");
+}
+
+#[test]
 fn nav_stops_at_the_edge_when_the_conf_says_stop() {
     let dir = TempDir::new("nav-stop");
-    let conf = dir.write("herdr-splits.conf", "nav_at_edge=stop\n");
+    let conf = dir.write(
+        "herdr-splits.conf",
+        "nav_at_edge=stop\nmost_recently_focused=false\n",
+    );
     let fixture = dir.write(
         "fixture.jsonl",
         &format!("{PLAIN_DETECTION}{EDGES_AT_LEFT}"),
@@ -267,6 +425,9 @@ fn nav_stops_at_the_edge_when_the_conf_says_stop() {
 #[test]
 fn nav_pane_only_never_forwards_a_chord() {
     let dir = TempDir::new("nav-pane-only");
+    // MRU off: this case is about the pane-level edges path, and the MRU path
+    // would need a `pane.layout` reply first.
+    let conf = dir.write("herdr-splits.conf", "most_recently_focused=false\n");
     let fixture = dir.write(
         "fixture.jsonl",
         &format!(
@@ -286,7 +447,10 @@ fn nav_pane_only_never_forwards_a_chord() {
             "--trace",
             trace.to_str().unwrap(),
         ],
-        &[("HERDR_PANE_ID", "A")],
+        &[
+            ("HERDR_PANE_ID", "A"),
+            ("HERDR_SPLITS_CONFIG", conf.to_str().unwrap()),
+        ],
     );
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(
@@ -300,6 +464,7 @@ fn nav_pane_only_never_forwards_a_chord() {
 #[test]
 fn nav_pane_only_honours_the_nav_at_edge_override() {
     let dir = TempDir::new("nav-pane-only-stop");
+    let conf = dir.write("herdr-splits.conf", "most_recently_focused=false\n");
     let fixture = dir.write("fixture.jsonl", EDGES_AT_LEFT);
     let trace = dir.join("trace.log");
 
@@ -314,7 +479,10 @@ fn nav_pane_only_honours_the_nav_at_edge_override() {
             "--trace",
             trace.to_str().unwrap(),
         ],
-        &[("HERDR_PANE_ID", "A")],
+        &[
+            ("HERDR_PANE_ID", "A"),
+            ("HERDR_SPLITS_CONFIG", conf.to_str().unwrap()),
+        ],
     );
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(traced_methods(&trace), vec!["pane.edges"]);
@@ -447,4 +615,61 @@ fn install_without_a_checkout_is_a_clear_failure() {
         "{}",
         stderr(&output)
     );
+}
+
+#[test]
+fn doctor_reports_where_the_policy_came_from() {
+    let dir = TempDir::new("doctor-source");
+    let conf = dir.join("herdr-splits.conf");
+    let conf_str = conf.to_str().unwrap();
+
+    // 1. Missing: documented as harmless, not as an error.
+    let missing = run(&["doctor"], &[("HERDR_SPLITS_CONFIG", conf_str)]);
+    let text = stdout(&missing) + &stderr(&missing);
+    assert!(text.contains("config source: missing"), "{text}");
+
+    // 2. Hand-written.
+    std::fs::write(&conf, "unzoom_on_nav=true\n").unwrap();
+    let written = run(&["doctor"], &[("HERDR_SPLITS_CONFIG", conf_str)]);
+    let text = stdout(&written) + &stderr(&written);
+    assert!(text.contains("config source: hand-written"), "{text}");
+
+    // 3. Generated by an opt-in `setup()`.
+    std::fs::write(&conf, "# herdr-splits-generated-v1\nunzoom_on_nav=true\n").unwrap();
+    let generated = run(&["doctor"], &[("HERDR_SPLITS_CONFIG", conf_str)]);
+    let text = stdout(&generated) + &stderr(&generated);
+    assert!(text.contains("config source: generated by"), "{text}");
+}
+
+#[test]
+fn a_config_dir_that_is_not_writable_is_not_a_usage_error() {
+    let dir = TempDir::new("init-readonly");
+    // A directory where the conf should be a file: creating it must fail.
+    let conf = dir.join("nested/herdr-splits.conf");
+    std::fs::create_dir_all(&conf).unwrap();
+
+    let output = run(
+        &["init"],
+        &[("HERDR_SPLITS_CONFIG", conf.to_str().unwrap())],
+    );
+    // 1 = environment failure; 2 stays reserved for usage errors.
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(!stderr(&output).is_empty());
+}
+
+#[test]
+fn doctor_distinguishes_an_unreadable_conf_from_a_missing_one() {
+    let dir = TempDir::new("doctor-unreadable");
+    let conf = dir.join("herdr-splits.conf");
+    // A directory where a file is expected: reading fails with something that is
+    // not NotFound, and must not be reported as the documented "missing" state.
+    std::fs::create_dir_all(&conf).unwrap();
+
+    let output = run(
+        &["doctor"],
+        &[("HERDR_SPLITS_CONFIG", conf.to_str().unwrap())],
+    );
+    let text = stdout(&output) + &stderr(&output);
+    assert!(text.contains("config source: unreadable"), "{text}");
+    assert!(!text.contains("config source: missing"), "{text}");
 }

@@ -22,7 +22,8 @@ Inspired by [smart-splits.nvim](https://github.com/mrjones2014/smart-splits.nvim
 - **Plain Vim support**: `Ctrl+hjkl` navigation (normal and terminal mode) with the same MRU/config semantics as Neovim, including at the pane edge.
 - **at_edge behaviours**: `wrap` (default), `stop`, `split`, or a custom function.
 - **Plugin-aware**: Ignores snacks/neo-tree/dadbod-ui/aerial sidebars and embedded floats (zindex < 50) by default — your keybinds never get trapped inside a picker.
-- **Smart unzoom + wrap-around**: Auto-unzooms when leaving a zoomed pane. At a layout edge, navigation wraps to the opposite side — crossing into a sibling Herdr pane when one exists (e.g. `pane | nvim` → `ctrl+l` wraps to the pane), otherwise wrapping within Neovim. Herdr-pane navigation also wraps around at edges (past the last pane → the first). Does not unzoom when moving between Neovim splits in one pane.
+- **Zoom-aware navigation**: leaves a zoomed pane zoomed by default (the zoom follows the focus); `unzoom_on_nav=true` reveals the destination pane instead. Never unzooms when moving between Neovim splits in one pane.
+- **Wrap-around** (opt-in via `nav_at_edge=wrap`): at a layout edge, navigation continues on the opposite side — crossing into a sibling Herdr pane when one exists (e.g. `pane | nvim` → `ctrl+l` wraps to the pane), otherwise wrapping within Neovim. Herdr-pane navigation wraps around at edges too (past the last pane → the first).
 - **Count prefix support**: `3<C-h>` moves three splits left; `5<M-l>` resizes five steps right.
 
 ## Requirements
@@ -99,17 +100,20 @@ herdr plugin link /path/to/herdr-splits
         'quickfix',
       },
       move_cursor_same_row = false,
-      most_recently_focused = false,  -- tmux-style target choice at both levels: most recently focused adjacent window/pane wins (pane recency is shared with the Herdr-side scripts)
       herdr_bin = nil,                -- auto-detected from HERDR_BIN_PATH
       floating_zindex_max = 50,       -- floats with zindex < this are treated as embedded sidebars
       ignore_previewwindows = false,  -- opt-in: also treat previewwindow windows (e.g. .dbout) as sidebars
       -- auto_sync_herdr = true,      -- opt-in: sync Herdr-side scripts on update
-      -- Managed keys — written to the generated herdr-splits.conf so the
-      -- Herdr-side scripts agree. Pass Neovim notation (e.g. <M-Left>).
-      nav_keys    = { left = '<C-h>', down = '<C-j>', up = '<C-k>', right = '<C-l>' },
-      resize_keys = { left = '<M-h>', down = '<M-j>', up = '<M-k>', right = '<M-l>' },
-      unzoom_on_nav = true,   -- auto-unzoom when navigating away from a zoomed pane
-      nav_at_edge    = 'wrap', -- 'wrap' | 'stop' — Herdr pane-boundary wrap (distinct from at_edge)
+      --
+      -- The instance policy (unzoom_on_nav, nav_at_edge, most_recently_focused and
+      -- the forwarded chords) lives in herdr-splits.conf, which Herdr, plain Vim
+      -- and Neovim all read; the helper creates it with the defaults on first use.
+      -- Set these only to override them for THIS editor's panes:
+      -- unzoom_on_nav = false, nav_at_edge = 'wrap', most_recently_focused = true,
+      -- Opt-in: make setup() the authority instead: it then writes the policy to
+      -- the conf and ignores what an earlier setup() put there.
+      -- overwrite_conf = true,
+      --
       -- Opt-in: re-map the nav chords in terminal buffers so the edge hands
       -- off to Herdr instead of stopping inside Neovim (see "Terminal-mode
       -- navigation" below). `true` = every pty terminal.
@@ -157,9 +161,11 @@ handoff).
 Inside a Herdr pane the plugin:
 
 - maps `<C-h/j/k/l>` in normal and terminal mode;
-- reads `most_recently_focused` from the shared `herdr-splits.conf` written by
-  the Neovim `setup()` (override per editor with
-  `let g:herdr_splits_most_recently_focused = 0` or `1`);
+- reads `most_recently_focused`, `unzoom_on_nav`, `nav_at_edge` and the
+  forwarded chords from `herdr-splits.conf` (`herdr-splits init` writes a
+  scaffold; the file is shared with Neovim and the Herdr-side helper, so both
+  editors stay in step — override per editor with
+  `let g:herdr_splits_most_recently_focused = 0` or `1` if you really need to);
 - hands the direction to `scripts/bin/herdr-splits nav --pane-only` (the same
   Rust helper the Herdr actions run) when Vim is at its edge. The hand-off is
   synchronous — the helper lives for milliseconds, and a chord should not race a
@@ -174,7 +180,7 @@ Configuration (set before the plugin loads):
 let g:herdr_splits_bin = ''                   " explicit helper path (default: this checkout's build)
 let g:herdr_splits_python = 'python'          " fallback interpreter, only if the helper is missing
 let g:herdr_splits_script = ''                " fallback herdr-nav.py path
-let g:herdr_splits_most_recently_focused = 1  " override the shared conf
+let g:herdr_splits_most_recently_focused = 1  " override the instance policy for Vim
 let g:herdr_splits_terminal_nav = 1           " terminal-mode chords (install-time opt-out)
 let g:herdr_splits_terminal_skip_filetypes = ['fzf']  " terminal programs that keep C-hjkl
 ```
@@ -205,11 +211,12 @@ Notes:
   (it never crosses a pane boundary).
 - Plain Vim maps the chords in **both** normal and terminal mode (the terminal
   `tnoremap` is the only way to leave a terminal split there).
-- Plain Vim can override two conf values for its own edge hand-off, because the
-  shared conf is one file per Herdr instance and only a Neovim `setup()` writes
-  it (`autoload/herdr_splits.vim` passes them to the helper as
-  `--nav-at-edge` / `--unzoom`): `let g:herdr_splits_nav_at_edge = 'stop'` and
-  `let g:herdr_splits_unzoom_on_nav = 0`. Leave them unset and the conf decides.
+- Plain Vim can override the policy for its own edge hand-off, since it reads
+  the instance policy rather than owning it (`autoload/herdr_splits.vim` passes
+  the overrides to the helper as `--nav-at-edge` / `--unzoom`):
+  `let g:herdr_splits_nav_at_edge = 'stop'` and
+  `let g:herdr_splits_unzoom_on_nav = 0`. Leave them unset and the conf decides
+  — which is what you normally want, so both editors agree.
   `g:herdr_splits_most_recently_focused` is forwarded too, so the pane-level
   pick agrees with the in-window one.
 
@@ -284,8 +291,8 @@ Behavior:
 - **Floating terminals** keep the chord: it belongs to the program inside
   (htop, fzf, ssh, ...). The mapping returns the key unremapped, mirroring
   LazyVim's own `is_floating` branch.
-- The maps follow `nav_keys`, so a remap (e.g. `<M-Left>`) applies in terminal
-  mode too.
+- The maps follow the chords in the conf, so a remap (`nav_key_left=alt+left`)
+  applies in terminal mode too — `nav_keys_nvim` is derived from the conf.
 - Scope it: `terminal_nav = true` covers every `buftype=terminal` buffer
   (`:terminal`, toggleterm, dap-repl-style ptys, ...). If a terminal runs
   something that wants the chords itself (a nested Vim, htop), either narrow it
@@ -354,22 +361,103 @@ command = "herdr-splits.resize-right"
 >
 > If you're using [smart-splits.nvim](https://github.com/mrjones2014/smart-splits.nvim) for tmux, add `cond = vim.env.HERDR_ENV ~= '1'` to its spec so the two plugins don't conflict.
 
+### Instance policy: `herdr-splits.conf`
+
+Five settings describe how navigation behaves for a whole Herdr instance, not
+for one editor: the four forwarded chords (`nav_key_*`, `resize_key_*`),
+`unzoom_on_nav`, `nav_at_edge` and `most_recently_focused`. They live in one
+file that **every** participant reads — the Herdr-side helper (on every
+keypress), plain Vim, and Neovim (in `setup()`, or `:HerdrSplitsReload`):
+
+```
+herdr plugin config-dir herdr-splits     # prints the directory
+# e.g. ~/.config/herdr/plugins/config/herdr-splits/herdr-splits.conf
+#      %APPDATA%\herdr\plugins\config\herdr-splits\herdr-splits.conf
+```
+
+`HERDR_SPLITS_CONFIG` overrides the file, `HERDR_PLUGIN_CONFIG_DIR` the
+directory; both must be visible to the Herdr server *and* the editors.
+
+**The helper creates it.** `nav`, `resize` and `install` write the scaffold when
+it is missing, so a fresh install has a file to edit instead of only living
+inside the defaults. No *editor* writes it as a side effect of starting up, so
+the instance's policy is never decided behind your back. `herdr-splits init`
+writes it explicitly (refuses to replace an existing file without `--force`,
+`--print` writes to stdout):
+
+```sh
+herdr-splits init            # write it now, with a message
+herdr-splits init --print    # just show the scaffold
+herdr-splits init --force     # reset it to the defaults
+herdr-splits doctor          # what is in effect, and where it came from
+```
+
+**A missing file is a valid state.** Every reader then falls back to the same
+built-in defaults the scaffold spells out — and the scaffold *is* those
+defaults, so creating it changes no behaviour. Deleting the file is therefore a
+reset: the helper recreates it with the defaults below.
+
+**Format.** One `key=value` per line, `#` starts a comment, and the *last*
+occurrence of a key wins (so a generated file stays readable):
+
+```
+nav_key_left=ctrl+h
+resize_key_left=alt+h
+unzoom_on_nav=false
+nav_at_edge=wrap
+most_recently_focused=true
+```
+
+The shipped defaults are `unzoom_on_nav=false` (the pane stays zoomed; the zoom
+follows the focus), `nav_at_edge=wrap`, `most_recently_focused=true` and
+`ctrl+hjkl` / `alt+hjkl`.
+
+**Neovim opts vs the file.** `setup()` reads the file and then applies its own
+managed opts (if any) *for its own panes only* — an escape hatch, not a way to
+configure the instance. Setting them in one editor while another reads the file
+is exactly how the two drift apart, so prefer the file alone.
+
+**`overwrite_conf = true`** flips that: `setup()` becomes the authority, writes
+the file on every start (stamping `# herdr-splits-generated-v1` as its first
+line) and ignores what a previous `setup()` generated, so removing an opt
+reverts it. `:HerdrSplitsReload` re-projects and rewrites the file too, so the
+helper cannot end up reading a value this session no longer uses. Use it when
+you want Lua to be the single source; leave it off (the default) when the file
+is.
+
+**Editing rules.** With `overwrite_conf` off (the default) nothing ever rewrites
+the conf: every value you write is honoured, whichever form the file has.
+*Editing* a file that carries the generated marker only sticks while
+`overwrite_conf` stays off; with it on, `setup()` regenerates the file on every
+start (that is what the marker means), so delete the
+`# herdr-splits-generated-v1` line to take ownership instead.
+`:checkhealth herdr-splits` reports which kind the current file is, plus the
+values in effect.
+
+**Freshness per reader.** The helper reads the conf per keypress, plain Vim per
+chord, Neovim once per `setup()` — run `:HerdrSplitsReload` after editing the
+file (a changed chord only reaches Terminal mode once those buffers are
+reopened, because the maps are installed per buffer).
+
 ### Auto-unzoom and wrap-around
 
-**Auto-unzoom.** When you navigate away from a **zoomed** pane, herdr-splits
-unzooms first so the destination is visible — whether you're crossing into a
-sibling Herdr pane or wrapping at a layout edge. It does not unzoom when
-moving between Neovim splits inside the same pane.
+**Auto-unzoom** (off by default). With `unzoom_on_nav=true` in the instance
+policy, navigating away from a **zoomed** pane unzooms first so the destination
+is visible — whether you're crossing into a sibling Herdr pane or wrapping at a
+layout edge. It never unzooms when moving between Neovim splits inside the same
+pane.
 
-**Wrap-around.** When you reach a layout edge in the direction you pressed
-(nowhere further to go that way), the default `wrap` behaviour continues on
-the opposite side:
+The shipped default is `unzoom_on_nav=false`: **the pane stays zoomed and the
+zoom follows the focus**, so pressing `ctrl+l` in a full-screen nvim lands you
+full-screen in the neighbour.
+
+**Wrap-around.** The shipped default is `nav_at_edge=wrap`: reaching the layout
+edge continues on the opposite side. Set `nav_at_edge=stop` (see below) to halt
+instead.
 
 - If a Herdr pane sits on the opposite side, focus crosses into it — so
   `pane | nvim` wraps `ctrl+l` back to the pane, and
-  `pane | nvim win1 | win2` wraps from win2 to the pane. With `nav_at_edge=stop`
-  (see below) this cross-to-opposite-pane is suppressed and the wrap stays
-  within Neovim instead.
+  `pane | nvim win1 | win2` wraps from win2 to the pane.
 - Otherwise it wraps within Neovim (smart-splits default).
 - Between plain Herdr panes, navigation wraps around at edges too (past the
   last pane → the first).
@@ -377,36 +465,28 @@ the opposite side:
   so you can leave it at an edge. Parent-backed embedded floats use their
   containing split's geometry; unresolved embedded overlays remain gated.
 
-**To disable auto-unzoom entirely**, pass `unzoom_on_nav = false` to `setup()`:
+**To disable auto-unzoom entirely**, set `unzoom_on_nav=false` in the instance
+policy (see above):
 
-```lua
-require('herdr-splits').setup({ unzoom_on_nav = false })
+```
+unzoom_on_nav=false
 ```
 
-These options are written to a generated `herdr-splits.conf` (default
-`~/.config/herdr/plugins/config/herdr-splits/herdr-splits.conf`; print the
-path with `herdr plugin config-dir herdr-splits`) so the Herdr-side scripts
-agree — you configure them once, from `setup()`. **Do not hand-edit that
-file:** it is regenerated on every `setup()`. Any values already present are
-adopted once the first time `setup()` runs after an upgrade, then
-overwritten thereafter. Set `HERDR_SPLITS_CONFIG` to override the path on
-both sides.
+**To stop at layout edges instead**, set `nav_at_edge=stop` in the instance policy:
 
-**To stop at layout edges instead of wrapping**, pass `nav_at_edge = 'stop'`:
-
-```lua
-require('herdr-splits').setup({ nav_at_edge = 'stop' })
+```
+nav_at_edge=stop
 ```
 
 This single switch controls wrap-across-boundary on **both** sides:
 
 - **Plain Herdr panes:** `wrap` (the default) wraps to the opposite pane at an
   edge; `stop` halts.
-- **Neovim edge wrap:** when Neovim's `at_edge='wrap'`, `wrap` (the default)
-  lets the wrap cross to the Herdr pane on the opposite side (e.g. `ctrl+l` from
-  the last nvim split lands on the pane); `stop` keeps the wrap within Neovim
-  (e.g. `ctrl+l` from the last split cycles to the first split instead of
-  leaving Neovim). `at_edge='stop'` halts regardless of `nav_at_edge`.
+- **Neovim edge wrap:** when Neovim's `at_edge='wrap'`, `wrap` lets the wrap
+  cross to the Herdr pane on the opposite side (e.g. `ctrl+l` from the last nvim
+  split lands on the pane); `stop` keeps the wrap within Neovim (e.g. `ctrl+l`
+  from the last split cycles to the first split instead of leaving Neovim).
+  `at_edge='stop'` halts regardless of `nav_at_edge`.
 
 Note: `at_edge` (Neovim window-edge behaviour: `wrap`/`stop`/`split`/function)
 and `nav_at_edge` (Herdr pane-boundary wrap: `wrap`/`stop`) are two different
@@ -414,56 +494,56 @@ things despite the shared name — `at_edge` is Neovim-side only and is not
 written to the conf.
 
 Because `nav_at_edge`, `unzoom_on_nav`, `most_recently_focused` and the key
-chords live in one generated conf **per Herdr instance**, the conf itself is
-global even though only a Neovim `setup()` writes it: the last Neovim to call
-`setup()` wins (a newly started Neovim, a `:Lazy reload`, an update), and the
-values apply to every pane in that instance, including plain shells.
+chords live in one conf **per Herdr instance**, the values apply to every pane
+in that instance, including plain shells — and, since only an editor *reads*
+them, two editors cannot overwrite each other's policy. (With
+`overwrite_conf = true` the last Neovim to call `setup()` does win, which is
+exactly the trade-off that option makes.)
 
-Two ways out of that, both of them "the caller decides":
+Each participant can still override the policy for its own edge hand-off:
 
-- **Plain Vim** passes its own values for the edge hand-off:
-  `g:herdr_splits_nav_at_edge`, `g:herdr_splits_unzoom_on_nav`,
-  `g:herdr_splits_most_recently_focused` become `--nav-at-edge=wrap|stop`,
-  `--unzoom=on|off` and `--most-recently-focused=on|off` on the helper call.
-- **Any caller** can do the same by hand; the flags override the conf for that
+- **Plain Vim** forwards `g:herdr_splits_nav_at_edge`,
+  `g:herdr_splits_unzoom_on_nav` and `g:herdr_splits_most_recently_focused` as
+  `--nav-at-edge=wrap|stop`, `--unzoom=on|off` and
+  `--most-recently-focused=on|off` on the helper call. Unset, the conf decides.
+- **Neovim** decides in-process; the same three keys in `setup()` are its
+  override, and it never writes the conf unless `overwrite_conf` is on.
+- **Any caller** can pass the flags by hand — they override the conf for that
   one invocation (`herdr-splits nav --help`).
 
-Neovim needs neither: it decides in-process from its own `setup()` values.
+With `unzoom_on_nav=false` (the default), navigation leaves the pane zoomed.
+Herdr keeps reporting the pre-zoom pane tiling and edge flags while zoomed, so
+MRU selection and edge wrapping work as usual; focus moves and the zoom follows
+it. With `unzoom_on_nav=true`, pressing toward an edge while zoomed first
+unzooms the pane (so the destination is visible) and then halts — the pane
+unzooms even though focus doesn't move.
 
-Hand-editing the conf still does not survive the next `setup()` — use
-`HERDR_SPLITS_CONFIG` if you genuinely need two different instances.
+**To remap the keys forwarded into Neovim**, edit `nav_key_*` / `resize_key_*`
+in the instance policy. Override only the directions you rebind; the rest keep
+their defaults. By default the helper forwards `ctrl+h/j/k/l` for navigation
+and `alt+h/j/k/l` for resizing — the chords the documented Neovim keymaps bind:
 
-With `unzoom_on_nav=false`, navigation leaves the pane zoomed. Herdr keeps
-reporting the pre-zoom pane tiling and edge flags while zoomed, so MRU
-selection and edge wrapping work as usual; focus moves and the zoom follows
-it. With the default `unzoom_on_nav=true`, pressing toward an edge while
-zoomed first unzooms the pane (so the destination is visible) and then halts —
-the pane unzooms even though focus doesn't move.
-
-**To remap the keys forwarded into Neovim**, pass `nav_keys` / `resize_keys`
-to `setup()` in Neovim notation (e.g. `<M-Left>`). Override only the
-directions you rebind; the rest keep their defaults. By default the scripts
-forward `ctrl+h/j/k/l` for navigation and `alt+h/j/k/l` for resizing — the
-chords the documented Neovim keymaps bind:
-
-```lua
-require('herdr-splits').setup({
-  nav_keys    = { left = '<M-Left>', down = '<M-Down>', up = '<M-Up>', right = '<M-Right>' },
-  resize_keys = { left = '<M-S-Left>', down = '<M-S-Down>', up = '<M-S-Up>', right = '<M-S-Right>' },
-})
+```
+nav_key_left=alt+left
+nav_key_down=alt+down
+nav_key_up=alt+up
+nav_key_right=alt+right
 ```
 
-- Pass Neovim notation in `setup()` (`<C-h>`, `<M-Left>`); it is translated to the Herdr chord notation (`ctrl+h`, `alt+left`) the generated conf writes and `herdr pane send-keys` accepts.
-- Any direction left unset keeps its default.
-- The chord forwarded into Neovim must match the Neovim keymap that catches it: `<M-Left>` in `setup()` is the same key `alt+left` the script forwards, so keep your `vim.keymap.set` in sync with `nav_keys`.
+- The conf uses Herdr chord notation (`alt+left`); `setup()` used to accept
+  Neovim notation (`<M-Left>`) and translate it. `herdr pane send-keys` accepts
+  the same notation the conf carries.
+- Any direction left out keeps its default.
+- The chord forwarded into Neovim must match the Neovim keymap that catches it,
+  so keep your `vim.keymap.set` in sync. Terminal-mode maps do follow the conf
+  automatically (`nav_keys_nvim` is derived from it).
+- With `overwrite_conf = true` you may instead pass `nav_keys` / `resize_keys`
+  to `setup()` in Neovim notation; without it they are ignored (with a warning)
+  because Herdr has to know the chord and it reads the conf.
 
-> **Eager load required for custom keys.** The generated conf is written by
-> `setup()`, so custom `nav_keys`/`resize_keys` need `setup()` to run eagerly
-> or at `VeryLazy` — do **not** lazy-load this plugin _only_ from the same
-> custom key mappings it must publish. Otherwise the conf carrying your custom
-> chords isn't written before Herdr forwards them, and those keys can't reach
-> Neovim to trigger the lazy load. The recommended spec above already uses
-> `event = 'VeryLazy'`.
+> **No eager load needed for custom chords.** The chords are in the conf, which
+> the helper reads directly, so a lazy-loaded plugin is fine — Herdr can
+> forward a chord before Neovim has loaded anything.
 
 ## Local development
 
@@ -540,6 +620,10 @@ Each trace line is `method<TAB>params-json<TAB>ok|error`.
 
 ```lua
 require('herdr-splits').setup(opts)
+
+-- Re-read herdr-splits.conf (instance policy) after editing it; also available
+-- as :HerdrSplitsReload. Reports whether the policy or the chords changed.
+require('herdr-splits').reload()
 
 -- (Re)install terminal-mode navigation after changing `terminal_nav` at runtime
 require('herdr-splits').setup_terminal_nav()
@@ -672,12 +756,14 @@ but no resize mappings.
 | `nav <dir> [--pane-only]` | the navigation decision tree, then `pane.send_keys`, `pane.focus` or `pane.focus_direction` |
 | `resize <dir> [amount]` | forward the chord to Neovim, or `pane.resize` (default amount `0.03`) |
 | `install [--root DIR]` | copy itself to `<plugin>/scripts/bin/herdr-splits` |
-| `doctor` | print resolved socket/conf/pane and probe the server |
+| `init [--force] [--print]` | write a `herdr-splits.conf` scaffold (instance policy), or print it |
+| `doctor` | print resolved socket/conf/pane (and where the conf came from) and probe the server |
 
 Exit codes match the Python scripts it replaced: `0` done (including "at the
-edge, nothing to do"), `1` herdr unreachable / no current pane / RPC failure,
-`2` usage error. Successful runs print nothing; herdr captures the action's
-output into its plugin log.
+edge, nothing to do"), `1` herdr unreachable / no current pane / RPC failure
+— and, for `init`, an environment refusal (the file already exists, or it
+cannot be written) — `2` usage error. Successful runs print nothing; herdr
+captures the action's output into its plugin log.
 
 **Compatibility with `scripts/herdr-nav.py` / `herdr-resize.py`.** The RPC
 sequence, exit codes and edge/zoom decisions are identical (the fixtures in
@@ -774,7 +860,7 @@ state. In plain Vim, `:echo &titlestring` inside a Herdr pane should end with
 | Feature                     | vim-herdr-navigation | herdr-splits.nvim            |
 | --------------------------- | -------------------- | ---------------------------- |
 | Navigation                  | ✓                    | ✓                            |
-| Plain Vim                   | ✓ (wincmd only)      | ✓ (MRU + shared conf)        |
+| Plain Vim                   | ✓ (wincmd only)      | ✓ (MRU + instance policy)    |
 | Resizing                    | ✗                    | ✓ (Neovim)                   |
 | at_edge behaviours          | ✗                    | wrap / stop / split / custom |
 | Count prefix                | ✗                    | ✓ (3<C-h> = move 3 left)     |

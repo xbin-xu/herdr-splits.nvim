@@ -27,6 +27,15 @@ platforms = ["linux", "macos", "windows"]
 # checkout build the helper yourself:
 #   make build          # or: sh scripts/build.sh / pwsh -File scripts\build.ps1
 #
+# Navigation policy (forwarded chords, unzoom_on_nav, nav_at_edge,
+# most_recently_focused) lives in `herdr-splits.conf`, which this helper, plain
+# Vim and Neovim all read. The helper writes a commented scaffold with the
+# defaults when the file is missing (`nav`, `resize`, `install`), so there is
+# always something to edit; `herdr-splits init` does it explicitly (`--print`
+# shows it, `--force` resets it). A missing file is harmless: every reader then
+# uses those same defaults. No editor rewrites the file as a side effect of
+# starting up.
+#
 # The build commands below run on `herdr plugin install`. They only need a Rust
 # toolchain: the crate has no dependencies, so no network access and, on
 # Windows, no Visual Studio -- the GNU toolchain and MinGW's gcc are enough.

@@ -44,6 +44,7 @@ rust/                          Herdr-side helper (what the actions run)
   src/mru.rs                   pane recency (shared mru-panes file)
   src/nav.rs resize.rs         decision trees
   src/config.rs                herdr-splits.conf parsing
+  src/init.rs                  conf scaffold (write / ensure it exists)
   src/install.rs doctor.rs     self-install and diagnostics
   tests/e2e.rs                 end-to-end tests over the real binary
   tests/vimnames.tsv           truth table generated from the Python matcher

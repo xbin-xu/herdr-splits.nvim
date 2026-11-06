@@ -153,6 +153,9 @@ T['focus, unzoom and resize map to RPC calls and report errors'] = function()
   local result = child.lua_func(function()
     vim.env.HERDR_ENV = '1'
     vim.env.HERDR_PANE_ID = 'pane-7'
+    -- Geometric path: the tmux-style selection has its own tests and would call
+    -- pane.layout first.
+    require('herdr-splits.config').most_recently_focused = false
     local queue = {
       { result = {} }, -- focus right: ok
       { error = { message = 'no neighbor' } }, -- focus left: error reply
@@ -362,6 +365,9 @@ T['wrap-cross flips to the opposite-boundary panes, not the reverse-nearest'] = 
       end,
     }
     require('herdr-splits.config').most_recently_focused = true
+    -- The boundary flip only considers wrapped candidates when nav_at_edge
+    -- allows wrapping.
+    require('herdr-splits.config').nav_at_edge = 'wrap'
     package.loaded['herdr-splits.herdr'] = nil
     local herdr = require('herdr-splits.herdr')
 

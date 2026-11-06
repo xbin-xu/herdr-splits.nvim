@@ -22,6 +22,8 @@ T['public module loads its expected API'] = function()
     local plugin = require('herdr-splits')
     local names = {
       'setup',
+      'reload',
+      'setup_terminal_nav',
       'sync_herdr',
       'resize_left',
       'resize_down',
@@ -43,6 +45,9 @@ T['public module loads its expected API'] = function()
 
   expect.equality(result, {
     setup = 'function',
+    -- Documented in the Lua-API section and used by `:HerdrSplitsReload`.
+    reload = 'function',
+    setup_terminal_nav = 'function',
     sync_herdr = 'function',
     resize_left = 'function',
     resize_down = 'function',
@@ -55,6 +60,25 @@ T['public module loads its expected API'] = function()
     add_ignored_filetype = 'function',
     add_ignored_buftype = 'function',
   })
+end
+
+T['the reload command uses the public API and reports the conf path'] = function()
+  local result = child.lua_func(function()
+    vim.env.HERDR_SPLITS_CONFIG = vim.fn.tempname() .. '.conf'
+    local notices = {}
+    vim.notify = function(msg)
+      notices[#notices + 1] = tostring(msg)
+    end
+    -- The plugin bootstrap defines the command; source it like a real start.
+    vim.cmd('runtime! plugin/herdr-splits.lua')
+    local defined = vim.fn.exists(':HerdrSplitsReload')
+    vim.cmd('HerdrSplitsReload')
+    return { defined = defined, notices = notices }
+  end)
+
+  expect.equality(result.defined, 2)
+  expect.equality(#result.notices, 1)
+  expect.equality(result.notices[1]:find('conf:', 1, true) ~= nil, true)
 end
 
 return T

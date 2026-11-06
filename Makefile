@@ -4,7 +4,7 @@ VIM ?= vim
 PYTHON ?= python
 CARGO ?= cargo
 
-.PHONY: deps test test-vim test-py check-shell build test-rust fmt clippy check
+.PHONY: deps test test-vim test-py test-sh check-shell build test-rust fmt clippy check
 
 deps:
 	@if git -C "$(ROOT)" ls-files --error-unmatch deps/mini.test >/dev/null 2>&1; then \
@@ -26,6 +26,11 @@ test-vim:
 
 test-py:
 	"$(PYTHON)" -m unittest discover -s "$(ROOT)/tests" -p 'test_*.py'
+
+# Reader parity for the bash fallback (scripts/herdr-nav.sh), which has no other
+# coverage: the conf semantics must match the Rust/Lua/Python/Vim readers.
+test-sh:
+	bash "$(ROOT)/tests/test_conf_reader.sh"
 
 check-shell:
 	bash -n "$(ROOT)/scripts/herdr-common.sh"
@@ -56,4 +61,4 @@ fmt:
 clippy:
 	"$(CARGO)" clippy --all-targets --locked --manifest-path "$(ROOT)/rust/Cargo.toml" -- -D warnings
 
-check: check-shell test test-vim test-py test-rust
+check: check-shell test test-vim test-py test-sh test-rust

@@ -57,3 +57,29 @@ _Avoid_: escape, exit, mode switch
 **Skip filetype**:
 A `filetype` whose terminal buffers keep the chord for the program inside, because that program already uses it (fzf moves its list with `CTRL-J`/`CTRL-K`; a nested Vim and lazygit want theirs too).
 _Avoid_: blacklist, ignore list
+
+### Configuration
+
+**Instance policy**:
+The navigation settings that belong to a Herdr instance rather than to one editor — the forwarded chords, `unzoom_on_nav`, `nav_at_edge`, `most_recently_focused` — read by the helper, plain Vim and Neovim alike.
+_Avoid_: settings, managed config, global config
+
+**`herdr-splits.conf`**:
+The file the instance policy lives in, created by the helper when it is missing and never written by an editor unless explicitly asked. Its scaffold spells out the built-in defaults, so creating or deleting it changes nothing behaviourally.
+_Avoid_: generated config, the conf file, herdr config
+
+**Shipped defaults**:
+The values every participant falls back to when the conf is missing — what the scaffold writes, so a missing conf and a fresh one agree.
+_Avoid_: built-in config, hardcoded defaults
+
+**Marked conf**:
+A `herdr-splits.conf` whose first line is the generated marker, written by `setup({ overwrite_conf = true })` — a projection of the Lua opts, regenerated on every start.
+_Avoid_: generated conf, auto config
+
+**Unmarked conf**:
+A `herdr-splits.conf` without the generated marker — the human's file; only `overwrite_conf` mode ever replaces it.
+_Avoid_: hand-written conf, manual config
+
+**Editor override**:
+A managed setting given to one editor (`setup()` opts in Neovim, `g:herdr_splits_*` in Vim) that applies to that editor's own panes instead of the instance policy.
+_Avoid_: local config, per-editor setting

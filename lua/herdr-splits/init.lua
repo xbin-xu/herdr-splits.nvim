@@ -31,6 +31,17 @@ function M.setup_terminal_nav()
   pcall(terminal.setup, config.terminal_nav)
 end
 
+---Re-read `herdr-splits.conf` (the instance policy) without restarting Neovim.
+---Also available as `:HerdrSplitsReload`. Neovim reads the policy once, in
+---setup(), so an edited conf needs this (or a restart) before the new values
+---take effect — the Herdr-side helper reads it on every keypress. Chords are
+---refreshed in memory too, but terminal-mode maps are installed per buffer, so a
+---changed chord only reaches Terminal mode once those buffers are reopened.
+---@return table report { path, policy_changed, chords_changed }
+function M.reload()
+  return config.reload()
+end
+
 ---Sync the Herdr-managed checkout to match this lazy commit.
 ---Intended as a lazy.nvim `build` hook entry point; respects `auto_sync_herdr`.
 ---Safe to call at any time; no-op unless opted in.
